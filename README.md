@@ -160,6 +160,7 @@ If you have one of these devices and want to help, [open an issue](https://githu
 
 Standing on shoulders:
 
+- [**@Nas3nmann**](https://github.com/Nas3nmann) — Scarlett 18i8 support, the device-profile–driven protocol layer, CI beta releases, and the packaged-build startup fix.
 - [**@x42** (Robin Gareus)](https://github.com/x42) — original Python reverse-engineering of the Scarlett 18i6 protocol in [`scarlettmixer`](https://github.com/x42/scarlettmixer). Many `wValue` / `wIndex` constants were first documented in his code.
 - **Linux kernel** — `sound/usb/mixer_scarlett.c` was an essential cross-reference, even where its 8i6 byte tables turned out to be marked _"untested..."_ (and indeed wrong about S/PDIF and Mix bus bytes).
 - [**@geoffreybennett** (Geoffrey Bennett)](https://github.com/geoffreybennett) — author of [`alsa-scarlett-gui`](https://github.com/geoffreybennett/alsa-scarlett-gui), the most thorough open-source Scarlett control panel for Linux.

@@ -93,7 +93,7 @@ jobs:
                Or: `xattr -dr com.apple.quarantine "/Applications/Scarlett MixControl.app"`
 
             ### Supported hardware (this branch)
-            - Scarlett **8i6** (1st gen) — tested
+            - Scarlett **8i6** (1st gen) — previously verified; re-testing after the device-profile refactor
             - Scarlett **18i8** (1st gen) — beta support
 
             ### Build info

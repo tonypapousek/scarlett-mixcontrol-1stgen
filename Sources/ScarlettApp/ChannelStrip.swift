@@ -278,7 +278,6 @@ struct StripMeter: View {
     var height: CGFloat = 220
 
     var body: some View {
-        let bus = MixBus(rawValue: source.rawValue) ?? .off
         let live = Self.level(from: state.peaks, source: source, profile: profile)
         let held = Self.level(from: state.peaksHeld, source: source, profile: profile)
         let max_ = Self.level(from: state.peaksMax, source: source, profile: profile)
