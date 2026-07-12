@@ -2,8 +2,11 @@ import SwiftUI
 import ScarlettCore
 
 enum AppInfo {
-    /// Bump on each user-visible release.
-    static let version = "0.1"
+    /// Read from the bundle's `CFBundleShortVersionString` (set by
+    /// `scripts/make-app.sh`, which CI overrides with the release tag) so the
+    /// displayed version can't drift from the actual release. Falls back to a
+    /// dev string when run without a bundle (e.g. `swift run`).
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0-dev"
 }
 
 /// Pixel-exact section heights shared by every strip in the mixer (channel,
@@ -75,7 +78,8 @@ extension SignalSource {
     var accentColor: Color {
         switch self {
         case .daw1, .daw2, .daw3, .daw4, .daw5, .daw6,
-             .daw7, .daw8, .daw9, .daw10, .daw11, .daw12:
+             .daw7, .daw8, .daw9, .daw10, .daw11, .daw12,
+             .daw13, .daw14, .daw15, .daw16, .daw17, .daw18, .daw19, .daw20:
             return Theme.accentPlayback
         case .analog1, .analog2, .analog3, .analog4,
              .analog5, .analog6, .analog7, .analog8,

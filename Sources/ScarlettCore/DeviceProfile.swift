@@ -57,6 +57,10 @@ public struct DeviceProfile: Sendable, Equatable {
     /// 8i6 has 6 + 2 loopback; 18i6/18i8 have 14 + 2 loopback.
     public let captureChannelCount: Int
     public let loopbackChannelCount: Int
+    /// Profile-specific reset order for USB capture destinations.  This is
+    /// intentionally data rather than "first N physical inputs": the 18i8's
+    /// established 14-channel layout keeps all eight ADAT inputs.
+    public let defaultCaptureSources: [MixBus]
 
     // ---- Hardware switches --------------------------------------------
     /// Channels (1-indexed in the UI) that have a Line/Inst impedance
@@ -161,6 +165,7 @@ extension DeviceProfile {
         ],
         captureChannelCount: 6,
         loopbackChannelCount: 2,
+        defaultCaptureSources: [.analog1, .analog2, .analog3, .analog4, .spdif1, .spdif2],
         impedanceChannels: [1, 2],
         hiLoChannels: [3, 4],
         hasMonitorMono: false   // hidden until the disconnect is solved
@@ -220,6 +225,11 @@ extension DeviceProfile {
         ],
         captureChannelCount: 18,    // 18 ToHost slots in USB26Tracker_OpSigTab
         loopbackChannelCount: 0,    // no Loop. entries in OpSigTab kind=3 list
+        defaultCaptureSources: [
+            .analog1, .analog2, .analog3, .analog4, .analog5, .analog6, .analog7, .analog8,
+            .spdif1, .spdif2,
+            .adat1, .adat2, .adat3, .adat4, .adat5, .adat6, .adat7, .adat8,
+        ],
         impedanceChannels: [1, 2],  // Inputs 1+2 are combo jacks (mic preamp)
         hiLoChannels: [],           // 18i6 has separate Hi-Z buttons on mics, not Hi/Lo
         hasMonitorMono: false
@@ -286,6 +296,11 @@ extension DeviceProfile {
         ],
         captureChannelCount: 14,
         loopbackChannelCount: 2,
+        defaultCaptureSources: [
+            .analog1, .analog2, .analog3, .analog4,
+            .spdif1, .spdif2,
+            .adat1, .adat2, .adat3, .adat4, .adat5, .adat6, .adat7, .adat8,
+        ],
         impedanceChannels: [1, 2],
         hiLoChannels: [],
         hasMonitorMono: false
@@ -343,6 +358,7 @@ extension DeviceProfile {
         ],
         captureChannelCount: 6,
         loopbackChannelCount: 0,
+        defaultCaptureSources: [.analog1, .analog2, .analog3, .analog4, .spdif1, .spdif2],
         impedanceChannels: [1, 2],  // 2 combo mic/line inputs
         hiLoChannels: [],
         hasMonitorMono: false
@@ -440,6 +456,11 @@ extension DeviceProfile {
         ],
         captureChannelCount: 18,
         loopbackChannelCount: 0,
+        defaultCaptureSources: [
+            .analog1, .analog2, .analog3, .analog4, .analog5, .analog6, .analog7, .analog8,
+            .spdif1, .spdif2,
+            .adat1, .adat2, .adat3, .adat4, .adat5, .adat6, .adat7, .adat8,
+        ],
         impedanceChannels: [],   // 8 mic pres; inst/pad switches unverified
         hiLoChannels: [],
         hasMonitorMono: false
@@ -539,9 +560,11 @@ extension DeviceProfile {
         }
     }
 
-    /// Index into `PeakReading.daw` for a DAW source byte.
+    /// Index into `PeakReading.daw` for a DAW source byte.  Matches on the
+    /// device's own DAW source list (bytes go up to 0x13 on the 18i20's 20 DAW
+    /// channels), so there's no fixed 12-channel cap; a non-DAW byte returns nil
+    /// and falls through to the input/mix meter lookups.
     public func dawMeterIndex(forByte byte: UInt8) -> Int? {
-        guard byte <= 0x0b else { return nil }
         let daw = sources.filter { $0.category == .daw }.sorted { $0.byte < $1.byte }
         return daw.firstIndex(where: { $0.byte == byte })
     }
@@ -562,6 +585,14 @@ extension DeviceProfile {
         return bus.rawValue
     }
 
+    /// Resolve only values explicitly advertised by this profile.  Device
+    /// writes use this stricter form so canonical sentinel IDs (for example
+    /// DAW 13 = 0xc0) can never leak onto an incompatible interface.
+    public func supportedWireByte(for bus: MixBus) -> UInt8? {
+        if bus == .off { return 0xff }
+        return sources.first(where: { $0.displayName == bus.displayName })?.byte
+    }
+
     /// Decode a device wire byte into the canonical `MixBus` the UI uses.
     public func mixBus(fromWireByte byte: UInt8) -> MixBus {
         if byte == 0xff { return .off }
@@ -579,6 +610,12 @@ extension DeviceProfile {
             return match.byte
         }
         return signal.rawValue
+    }
+
+    /// SignalSource counterpart to `supportedWireByte(for: MixBus)`.
+    public func supportedWireByte(for signal: SignalSource) -> UInt8? {
+        if signal == .off { return 0xff }
+        return sources.first(where: { $0.displayName == signal.displayName })?.byte
     }
 
     /// Decode a device wire byte into the canonical `SignalSource`.

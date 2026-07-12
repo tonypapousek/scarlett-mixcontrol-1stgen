@@ -103,6 +103,7 @@ final class MixerState {
     var metersStale: Bool = false   // true if last poll failed
     @ObservationIgnored private let peakDecayDbPerSecond: Double = 6
     @ObservationIgnored private var syncPollAccumulator: TimeInterval = 0
+    @ObservationIgnored private var restoringProfileState = false
 
     // MARK: - User-controlled values (defaults to "no change")
     //
@@ -194,7 +195,9 @@ final class MixerState {
     @ObservationIgnored private var coreAudioListenerInstalled = false
     @ObservationIgnored private var lastCoreAudioPresence: Bool = false
     var selectedBus: MixBus = .m1 {
-        didSet { saveSelectedBus() }
+        didSet {
+            if !restoringProfileState { saveSelectedBus() }
+        }
     }
 
     init() {
@@ -224,8 +227,8 @@ final class MixerState {
                 return
             }
             self.device = dev
-            ensureMatrixSizing(for: dev.profile)
-            ensureRouteSlots(for: dev.profile)
+            restoringProfileState = true
+            prepareState(for: dev.profile)
             if let bcd = dev.firmwareBCD() {
                 let hi = (bcd >> 8) & 0xff
                 let lo = bcd & 0xff
@@ -236,6 +239,7 @@ final class MixerState {
             self.serial = dev.serialNumber() ?? "—"
             refreshFromDevice()
             loadPersistedState()
+            restoringProfileState = false
             ensurePinnedDawChannels()
             if !wasConnected {
                 logEvent(.info, "Connection",
@@ -243,6 +247,7 @@ final class MixerState {
             }
             connection = .connected
         } catch ScarlettError.deviceNotFound {
+            restoringProfileState = false
             self.device = nil
             // Clear meters so we don't show stale levels frozen from before.
             peaks = .empty
@@ -255,6 +260,7 @@ final class MixerState {
                 connection = .waiting
             }
         } catch {
+            restoringProfileState = false
             self.device = nil
             peaks = .empty
             peaksHeld = .empty
@@ -414,6 +420,38 @@ final class MixerState {
         }
     }
 
+    /// Clear every value whose meaning or dimensions depend on the connected
+    /// model.  Hardware reads and PID-scoped persistence are layered on top
+    /// immediately afterwards.  This prevents an 8-bus device's M7/M8 and
+    /// output destinations from leaking into a later 6-bus connection.
+    private func prepareState(for profile: DeviceProfile) {
+        routes = Dictionary(uniqueKeysWithValues:
+            profile.physicalOutputs.map { ($0.wValue, MixBus.off) })
+        captureRoutes = [:]
+        selectedBus = profile.matrixOutputBuses.first ?? .m1
+
+        mixerSources = Array(repeating: .off, count: profile.matrixInputCount)
+        mixerLevels = Array(
+            repeating: Array(repeating: 0, count: profile.stereoPairCount),
+            count: profile.matrixInputCount
+        )
+        mixerPans = Array(
+            repeating: Array(repeating: 0, count: profile.stereoPairCount),
+            count: profile.matrixInputCount
+        )
+        mixerMutes = Array(repeating: false, count: profile.matrixInputCount)
+        mixerSolos = Array(repeating: false, count: profile.matrixInputCount)
+        mixerNames = Array(repeating: "", count: profile.matrixInputCount)
+        linkedPairs = []
+
+        monitorMono = false
+        showFirstLaunchPrompt = false
+        peaks = .empty
+        peaksHeld = .empty
+        peaksMax = .empty
+        metersStale = false
+    }
+
     private func ensureRouteSlots(for profile: DeviceProfile) {
         for out in profile.physicalOutputs where routes[out.wValue] == nil {
             routes[out.wValue] = .off
@@ -448,8 +486,11 @@ final class MixerState {
         // Routes — re-push to device so it actually honors them.
         if let data = defaults.data(forKey: routesKey(for: profile)),
            let dict = try? JSONDecoder().decode([UInt16: UInt8].self, from: data) {
+            let validOutputs = Set(profile.physicalOutputs.map(\.wValue))
             for (routeRaw, busRaw) in dict {
-                guard let bus = MixBus(rawValue: busRaw) else { continue }
+                guard validOutputs.contains(routeRaw),
+                      let bus = MixBus(rawValue: busRaw),
+                      profile.supportedWireByte(for: bus) != nil else { continue }
                 routes[routeRaw] = bus
                 if let dev = device {
                     writeAsync { try? dev.setRouteSource(wValue: routeRaw, from: bus) }
@@ -461,7 +502,9 @@ final class MixerState {
         if let data = defaults.data(forKey: captureRoutesKey(for: profile)),
            let dict = try? JSONDecoder().decode([UInt16: UInt8].self, from: data) {
             for (chRaw, busRaw) in dict {
-                guard let bus = MixBus(rawValue: busRaw) else { continue }
+                guard Int(chRaw) < profile.captureChannelCount + profile.loopbackChannelCount,
+                      let bus = MixBus(rawValue: busRaw),
+                      profile.supportedWireByte(for: bus) != nil else { continue }
                 captureRoutes[Int(chRaw)] = bus
             }
         }
@@ -489,7 +532,8 @@ final class MixerState {
             mixerNames = m.names
             linkedPairs = Set(m.linkedLefts)
             for ch in 0..<18 {
-                if let v = SignalSource(rawValue: m.sources[ch]) {
+                if let v = SignalSource(rawValue: m.sources[ch]),
+                   profile.supportedWireByte(for: v) != nil {
                     mixerSources[ch] = v
                 }
             }
@@ -524,16 +568,24 @@ final class MixerState {
     }
 
     private func saveRoutes() {
-        let dict = Dictionary(uniqueKeysWithValues:
-            routes.map { ($0.key, $0.value.rawValue) })
+        let validOutputs = Set(profile.physicalOutputs.map(\.wValue))
+        let pairs: [(UInt16, UInt8)] = routes.compactMap { route, bus in
+            guard validOutputs.contains(route), profile.supportedWireByte(for: bus) != nil else { return nil }
+            return (route, bus.rawValue)
+        }
+        let dict = Dictionary(uniqueKeysWithValues: pairs)
         if let data = try? JSONEncoder().encode(dict) {
             UserDefaults.standard.set(data, forKey: routesKey(for: profile))
         }
     }
 
     private func saveCaptureRoutes() {
-        let dict = Dictionary(uniqueKeysWithValues:
-            captureRoutes.map { (UInt16($0.key), $0.value.rawValue) })
+        let maxCount = profile.captureChannelCount + profile.loopbackChannelCount
+        let pairs: [(UInt16, UInt8)] = captureRoutes.compactMap { channel, bus in
+            guard (0..<maxCount).contains(channel), profile.supportedWireByte(for: bus) != nil else { return nil }
+            return (UInt16(channel), bus.rawValue)
+        }
+        let dict = Dictionary(uniqueKeysWithValues: pairs)
         if let data = try? JSONEncoder().encode(dict) {
             UserDefaults.standard.set(data, forKey: captureRoutesKey(for: profile))
         }
@@ -693,12 +745,22 @@ final class MixerState {
                     // once when we re-assign each top-level field.
                     var held = self.peaksHeld
                     var max_ = self.peaksMax
-                    for i in 0..<held.inputs.count { held.inputs[i] = max(p.inputs[i], held.inputs[i] - decay) }
-                    for i in 0..<held.daw.count    { held.daw[i]    = max(p.daw[i],    held.daw[i]    - decay) }
-                    for i in 0..<held.mixer.count  { held.mixer[i]  = max(p.mixer[i],  held.mixer[i]  - decay) }
-                    for i in 0..<max_.inputs.count { max_.inputs[i] = max(p.inputs[i], max_.inputs[i]) }
-                    for i in 0..<max_.daw.count    { max_.daw[i]    = max(p.daw[i],    max_.daw[i]) }
-                    for i in 0..<max_.mixer.count  { max_.mixer[i]  = max(p.mixer[i],  max_.mixer[i]) }
+                    // Size the held/max stores to this device (they start at the
+                    // fixed-size `.empty` = 8 daw / 8 mixer, but `p` is sized per
+                    // device: daw 6..20, mixer 6..8). Resizing on the first poll
+                    // (and any device change) gives the 18i20 its full 20 daw
+                    // meters and — with the `min` bounds below — makes it
+                    // impossible to read `p` out of range on 8i6/18i6/6i6.
+                    if held.daw.count   != p.daw.count   { held.daw   = Array(repeating: -.infinity, count: p.daw.count) }
+                    if max_.daw.count   != p.daw.count   { max_.daw   = Array(repeating: -.infinity, count: p.daw.count) }
+                    if held.mixer.count != p.mixer.count { held.mixer = Array(repeating: -.infinity, count: p.mixer.count) }
+                    if max_.mixer.count != p.mixer.count { max_.mixer = Array(repeating: -.infinity, count: p.mixer.count) }
+                    for i in 0..<min(held.inputs.count, p.inputs.count) { held.inputs[i] = max(p.inputs[i], held.inputs[i] - decay) }
+                    for i in 0..<min(held.daw.count,    p.daw.count)    { held.daw[i]    = max(p.daw[i],    held.daw[i]    - decay) }
+                    for i in 0..<min(held.mixer.count,  p.mixer.count)  { held.mixer[i]  = max(p.mixer[i],  held.mixer[i]  - decay) }
+                    for i in 0..<min(max_.inputs.count, p.inputs.count) { max_.inputs[i] = max(p.inputs[i], max_.inputs[i]) }
+                    for i in 0..<min(max_.daw.count,    p.daw.count)    { max_.daw[i]    = max(p.daw[i],    max_.daw[i]) }
+                    for i in 0..<min(max_.mixer.count,  p.mixer.count)  { max_.mixer[i]  = max(p.mixer[i],  max_.mixer[i]) }
                     self.peaksHeld = held
                     self.peaksMax  = max_
 
@@ -1037,34 +1099,18 @@ final class MixerState {
     /// Both old call-sites (`forSource`, `forMixBus`) collapse into this one
     /// once we map a `SignalSource` to its `MixBus` equivalent.
     func clearMaxPeak(_ source: MixBus) {
-        switch source {
-        case .daw1:    peaksMax.daw[0] = -.infinity
-        case .daw2:    peaksMax.daw[1] = -.infinity
-        case .daw3:    peaksMax.daw[2] = -.infinity
-        case .daw4:    peaksMax.daw[3] = -.infinity
-        case .daw5:    peaksMax.daw[4] = -.infinity
-        case .daw6:    peaksMax.daw[5] = -.infinity
-        case .daw7:    peaksMax.daw[6] = -.infinity
-        case .daw8:    peaksMax.daw[7] = -.infinity
-        case .analog1: peaksMax.inputs[0] = -.infinity
-        case .analog2: peaksMax.inputs[1] = -.infinity
-        case .analog3: peaksMax.inputs[2] = -.infinity
-        case .analog4: peaksMax.inputs[3] = -.infinity
-        case .m1:      peaksMax.mixer[0] = -.infinity
-        case .m2:      peaksMax.mixer[1] = -.infinity
-        case .m3:      peaksMax.mixer[2] = -.infinity
-        case .m4:      peaksMax.mixer[3] = -.infinity
-        case .m5:      peaksMax.mixer[4] = -.infinity
-        case .m6:      peaksMax.mixer[5] = -.infinity
-        case .m7:      peaksMax.mixer[6] = -.infinity
-        case .m8:      peaksMax.mixer[7] = -.infinity
-        case .analog5, .analog6, .analog7, .analog8,
-             .spdif1, .spdif2,
-             .adat1, .adat2, .adat3, .adat4, .adat5, .adat6, .adat7, .adat8:
-            if let idx = profile.inputMeterIndex(forByte: profile.wireByte(for: source)) {
-                peaksMax.inputs[idx] = -.infinity
-            }
-        case .off, .daw9, .daw10, .daw11, .daw12: break
+        guard source != .off else { return }
+        // Resolve the meter slot the same way `PeakReading.level(for:profile:)`
+        // does — by the device's wire byte — so this works for every source on
+        // every profile (incl. the 18i20's DAW 13-20 and M7/M8) and stays in
+        // bounds regardless of how the peak arrays are sized.
+        let byte = profile.wireByte(for: source)
+        if let idx = profile.dawMeterIndex(forByte: byte), idx < peaksMax.daw.count {
+            peaksMax.daw[idx] = -.infinity
+        } else if let idx = profile.inputMeterIndex(forByte: byte), idx < peaksMax.inputs.count {
+            peaksMax.inputs[idx] = -.infinity
+        } else if let idx = profile.mixMeterIndex(forByte: byte), idx < peaksMax.mixer.count {
+            peaksMax.mixer[idx] = -.infinity
         }
     }
 
@@ -1077,6 +1123,98 @@ final class MixerState {
 
     // MARK: - Presets
 
+    /// Old presets predate product metadata. At that time only the 6-bus 8i6
+    /// and 8-bus 18i8 could create them, so the saved pair count is a safe
+    /// migration discriminator. Newer untagged experimental presets fail
+    /// closed instead of being guessed onto another device.
+    func effectiveProductID(for preset: ScarlettPreset) -> UInt16? {
+        if let productID = preset.productID { return productID }
+        guard let pairCount = preset.mixerLevels.first?.count else { return nil }
+        switch pairCount {
+        case DeviceProfile.scarlett8i6.stereoPairCount:
+            return DeviceProfile.scarlett8i6.productID
+        case DeviceProfile.scarlett18i8.stereoPairCount:
+            return DeviceProfile.scarlett18i8.productID
+        default:
+            return nil
+        }
+    }
+
+    func presetDeviceLabel(_ preset: ScarlettPreset) -> String {
+        guard let pid = effectiveProductID(for: preset) else { return "Legacy — unknown device" }
+        return DeviceProfile.forProductID(pid)?.displayName ?? String(format: "Unknown device (0x%04x)", pid)
+    }
+
+    private func snapshotRoutes() -> [UInt16: MixBus] {
+        let validOutputs = Set(profile.physicalOutputs.map(\.wValue))
+        return routes.filter { route, bus in
+            validOutputs.contains(route) && profile.supportedWireByte(for: bus) != nil
+        }
+    }
+
+    private func validate(_ preset: ScarlettPreset, for profile: DeviceProfile) throws {
+        if let version = preset.schemaVersion,
+           version > ScarlettPreset.currentSchemaVersion {
+            throw ScarlettPresetError.invalid("schema version \(version) is newer than this app supports")
+        }
+        if preset.schemaVersion != nil && preset.productID == nil {
+            throw ScarlettPresetError.invalid("device metadata is missing")
+        }
+
+        guard let presetPID = effectiveProductID(for: preset) else {
+            throw ScarlettPresetError.unknownLegacyDevice
+        }
+        guard presetPID == profile.productID else {
+            let presetName = DeviceProfile.forProductID(presetPID)?.displayName
+                ?? String(format: "device 0x%04x", presetPID)
+            throw ScarlettPresetError.deviceMismatch(
+                preset: presetName,
+                connected: profile.displayName
+            )
+        }
+
+        let validOutputs = Set(profile.physicalOutputs.map(\.wValue))
+        for (route, rawSource) in preset.routes {
+            guard validOutputs.contains(route) else {
+                throw ScarlettPresetError.invalid("output route \(route) does not exist")
+            }
+            guard let source = MixBus(rawValue: rawSource),
+                  profile.supportedWireByte(for: source) != nil else {
+                throw ScarlettPresetError.invalid("output route \(route) uses an unsupported source")
+            }
+        }
+
+        guard preset.mixerSources.count == profile.matrixInputCount else {
+            throw ScarlettPresetError.invalid("matrix source count is not \(profile.matrixInputCount)")
+        }
+        for rawSource in preset.mixerSources {
+            guard let source = SignalSource(rawValue: rawSource),
+                  profile.supportedWireByte(for: source) != nil else {
+                throw ScarlettPresetError.invalid("the matrix contains an unsupported source")
+            }
+        }
+
+        let rows = profile.matrixInputCount
+        let pairs = profile.stereoPairCount
+        guard preset.mixerLevels.count == rows,
+              preset.mixerLevels.allSatisfy({ $0.count == pairs }),
+              preset.mixerPans.count == rows,
+              preset.mixerPans.allSatisfy({ $0.count == pairs }) else {
+            throw ScarlettPresetError.invalid("matrix dimensions do not match \(profile.displayName)")
+        }
+        guard preset.mixerMutes.count == rows,
+              preset.mixerSolos.count == rows,
+              preset.mixerNames.count == rows else {
+            throw ScarlettPresetError.invalid("matrix channel metadata is incomplete")
+        }
+        guard preset.linkedLefts.allSatisfy({ $0 >= 0 && $0 < rows - 1 && $0.isMultiple(of: 2) }) else {
+            throw ScarlettPresetError.invalid("stereo-link indices are invalid")
+        }
+        guard Int(preset.selectedBus) < profile.mixBusCount else {
+            throw ScarlettPresetError.invalid("selected mix bus does not exist")
+        }
+    }
+
     func userSavePreset(name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
@@ -1085,8 +1223,10 @@ final class MixerState {
             id: UUID(),
             name: trimmed,
             createdAt: Date(),
+            schemaVersion: ScarlettPreset.currentSchemaVersion,
+            productID: profile.productID,
             routes: Dictionary(uniqueKeysWithValues:
-                routes.map { ($0.key, $0.value.rawValue) }),
+                snapshotRoutes().map { ($0.key, $0.value.rawValue) }),
             mixerSources: mixerSources.map { $0.rawValue },
             mixerLevels: mixerLevels,
             mixerPans: mixerPans,
@@ -1098,7 +1238,9 @@ final class MixerState {
         )
 
         // Replace any preset with the same name; otherwise append.
-        if let idx = presets.firstIndex(where: { $0.name == trimmed }) {
+        if let idx = presets.firstIndex(where: {
+            $0.name == trimmed && effectiveProductID(for: $0) == profile.productID
+        }) {
             presets[idx] = snapshot
         } else {
             presets.append(snapshot)
@@ -1106,8 +1248,9 @@ final class MixerState {
         savePresets()
     }
 
-    func userLoadPreset(_ preset: ScarlettPreset) {
+    func userLoadPreset(_ preset: ScarlettPreset) throws {
         guard let dev = device else { return }
+        try validate(preset, for: dev.profile)
 
         // Routes
         for (routeRaw, busRaw) in preset.routes {
@@ -1165,8 +1308,10 @@ final class MixerState {
             id: UUID(),
             name: name,
             createdAt: Date(),
+            schemaVersion: ScarlettPreset.currentSchemaVersion,
+            productID: profile.productID,
             routes: Dictionary(uniqueKeysWithValues:
-                routes.map { ($0.key, $0.value.rawValue) }),
+                snapshotRoutes().map { ($0.key, $0.value.rawValue) }),
             mixerSources: mixerSources.map { $0.rawValue },
             mixerLevels: mixerLevels,
             mixerPans: mixerPans,
@@ -1196,7 +1341,7 @@ final class MixerState {
     func userImportSnapshot(from url: URL) throws {
         let data = try Data(contentsOf: url)
         let preset = try JSONDecoder().decode(ScarlettPreset.self, from: data)
-        userLoadPreset(preset)
+        try userLoadPreset(preset)
         logEvent(.info, "Import", "Imported snapshot \(url.lastPathComponent)")
     }
 
@@ -1246,20 +1391,19 @@ final class MixerState {
         mixerSolos  = Array(repeating: false, count: 18)
         linkedPairs = []
 
+        // Seed the matrix with the device's physical inputs (analog, then
+        // S/PDIF, then ADAT — in source order), skipping the two channels
+        // reserved for the pinned DAW 1/2 strips so those aren't overwritten by
+        // ensurePinnedDawChannels() below. Devices with more inputs than free
+        // channels keep the earlier ones; unused channels stay Off.
+        let physicalInputs = profile.sources.filter { $0.category == .analog || $0.category == .digital }
+        let pinnedChannels: Set<Int> = [Self.pinnedDawLeftChannel, Self.pinnedDawRightChannel]
         var defaultSources: [SignalSource] = Array(repeating: .off, count: 18)
-        if hasADAT {
-            defaultSources[0] = .analog1; defaultSources[1] = .analog2
-            defaultSources[2] = .analog3; defaultSources[3] = .analog4
-            defaultSources[4] = .analog5; defaultSources[5] = .analog6
-            defaultSources[6] = .analog7; defaultSources[7] = .analog8
-            defaultSources[8] = .adat1;   defaultSources[9] = .adat2
-            defaultSources[10] = .adat3;  defaultSources[11] = .adat4
-            defaultSources[12] = .adat5;  defaultSources[13] = .adat6
-            defaultSources[14] = .spdif1; defaultSources[15] = .spdif2
-        } else {
-            defaultSources[0] = .analog1; defaultSources[1] = .analog2
-            defaultSources[2] = .analog3; defaultSources[3] = .analog4
-            defaultSources[4] = .spdif1;  defaultSources[5] = .spdif2
+        var seedIdx = 0
+        for ch in 0..<18 where !pinnedChannels.contains(ch) {
+            guard seedIdx < physicalInputs.count else { break }
+            defaultSources[ch] = SignalSource.fromDisplayName(physicalInputs[seedIdx].displayName) ?? .off
+            seedIdx += 1
         }
         for ch in 0..<18 {
             mixerSources[ch] = .off
@@ -1284,20 +1428,10 @@ final class MixerState {
         }
 
         captureRoutes.removeAll(keepingCapacity: true)
-        let captureDefaults: [(Int, MixBus)]
-        if hasADAT {
-            captureDefaults = [
-                (0, .analog1), (1, .analog2), (2, .analog3), (3, .analog4),
-                (4, .spdif1),  (5, .spdif2),
-                (6, .adat1),   (7, .adat2),  (8, .adat3),   (9, .adat4),
-                (10, .adat5),  (11, .adat6), (12, .adat7),  (13, .adat8),
-            ]
-        } else {
-            captureDefaults = [
-                (0, .analog1), (1, .analog2), (2, .analog3), (3, .analog4),
-                (4, .spdif1),  (5, .spdif2),
-            ]
-        }
+        // Capture defaults are profile data rather than "first N inputs".
+        // In particular, the confirmed 18i8 intentionally keeps Analog 1-4,
+        // S/PDIF 1-2, and every ADAT input in its 14 capture slots.
+        let captureDefaults = Array(profile.defaultCaptureSources.enumerated())
         for (ch, src) in captureDefaults {
             captureRoutes[ch] = src
             if let dev = device {

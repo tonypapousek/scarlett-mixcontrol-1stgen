@@ -46,17 +46,6 @@ jobs:
           swift --version
           xcodebuild -version
 
-      - name: Build .app and zip
-        run: ./scripts/make-release.sh
-
-      - name: Compute checksum
-        id: checksum
-        run: |
-          SHA=$(shasum -a 256 "build/Scarlett.MixControl.app.zip" | awk '{print $1}')
-          SIZE=$(stat -f '%z' "build/Scarlett.MixControl.app.zip")
-          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
-          echo "size_kb=$((SIZE / 1024))" >> "$GITHUB_OUTPUT"
-
       - name: Resolve release tag
         id: version
         env:
@@ -75,6 +64,19 @@ jobs:
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build .app and zip
+        env:
+          APP_VERSION: ${{ steps.version.outputs.tag }}
+        run: ./scripts/make-release.sh
+
+      - name: Compute checksum
+        id: checksum
+        run: |
+          SHA=$(shasum -a 256 "build/Scarlett.MixControl.app.zip" | awk '{print $1}')
+          SIZE=$(stat -f '%z' "build/Scarlett.MixControl.app.zip")
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "size_kb=$((SIZE / 1024))" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub pre-release
         uses: softprops/action-gh-release@v3

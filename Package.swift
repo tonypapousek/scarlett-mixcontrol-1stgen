@@ -28,5 +28,10 @@ let package = Package(
             // here.  That embeds Bundle.module in the binary, which fatalErrors
             // when the CI-built .app ships without the SPM resource bundle.
         ),
+        .testTarget(
+            name: "ScarlettCoreTests",
+            dependencies: ["ScarlettCore"],
+            path: "Tests/ScarlettCoreTests"
+        ),
     ]
 )

@@ -40,10 +40,15 @@ public enum ClockSource: UInt8, CaseIterable, Identifiable {
 ///   0x0c..0x0f → Analog 1..4
 ///   0x12..0x13 → S/PDIF 1..2   (NOT 0x10..0x11 — Linux is wrong)
 ///   0xff       → Off
-public enum SignalSource: UInt8, CaseIterable, Identifiable, Hashable {
+public enum SignalSource: UInt8, CaseIterable, Identifiable, Hashable, Sendable {
     case off = 0xff
     case daw1 = 0x00, daw2 = 0x01, daw3 = 0x02, daw4 = 0x03, daw5 = 0x04, daw6 = 0x05
     case daw7 = 0x06, daw8 = 0x07, daw9 = 0x08, daw10 = 0x09, daw11 = 0x0a, daw12 = 0x0b
+    // DAW 13-20 use canonical sentinel IDs (0xc0..): their real device bytes on
+    // the 18i20 are 0x0c..0x13, which collide with analog/S/PDIF, so the wire
+    // byte is resolved per-device from DeviceProfile by displayName, not rawValue.
+    case daw13 = 0xc0, daw14 = 0xc1, daw15 = 0xc2, daw16 = 0xc3
+    case daw17 = 0xc4, daw18 = 0xc5, daw19 = 0xc6, daw20 = 0xc7
     case analog1 = 0x0c, analog2 = 0x0d, analog3 = 0x0e, analog4 = 0x0f
     case analog5 = 0xb0, analog6 = 0xb1, analog7 = 0xb2, analog8 = 0xb3
     case spdif1 = 0x12, spdif2 = 0x13
@@ -67,6 +72,14 @@ public enum SignalSource: UInt8, CaseIterable, Identifiable, Hashable {
         case .daw10:   return "DAW 10"
         case .daw11:   return "DAW 11"
         case .daw12:   return "DAW 12"
+        case .daw13:   return "DAW 13"
+        case .daw14:   return "DAW 14"
+        case .daw15:   return "DAW 15"
+        case .daw16:   return "DAW 16"
+        case .daw17:   return "DAW 17"
+        case .daw18:   return "DAW 18"
+        case .daw19:   return "DAW 19"
+        case .daw20:   return "DAW 20"
         case .analog1: return "Analog 1"
         case .analog2: return "Analog 2"
         case .analog3: return "Analog 3"
@@ -121,10 +134,14 @@ public enum SignalSource: UInt8, CaseIterable, Identifiable, Hashable {
 /// Both x42 AND Linux were wrong about Mix-bus AND SPDIF bytes for the 8i6.
 /// Linux's `s8i6_info` is the `/* untested... */` table — empirically wrong.
 /// x42 reverse-engineered the 18i6, where the byte values differ.
-public enum MixBus: UInt8, CaseIterable, Identifiable, Hashable {
+public enum MixBus: UInt8, CaseIterable, Identifiable, Hashable, Sendable {
     case off = 0xff
     case daw1 = 0x00, daw2 = 0x01, daw3 = 0x02, daw4 = 0x03, daw5 = 0x04, daw6 = 0x05
     case daw7 = 0x06, daw8 = 0x07, daw9 = 0x08, daw10 = 0x09, daw11 = 0x0a, daw12 = 0x0b
+    // DAW 13-20: canonical sentinel IDs (see SignalSource) — real bytes 0x0c..0x13
+    // on the 18i20 are resolved per-device from DeviceProfile by displayName.
+    case daw13 = 0xc0, daw14 = 0xc1, daw15 = 0xc2, daw16 = 0xc3
+    case daw17 = 0xc4, daw18 = 0xc5, daw19 = 0xc6, daw20 = 0xc7
     case analog1 = 0x0c, analog2 = 0x0d, analog3 = 0x0e, analog4 = 0x0f
     case analog5 = 0xb0, analog6 = 0xb1, analog7 = 0xb2, analog8 = 0xb3
     case spdif1 = 0x12, spdif2 = 0x13
@@ -150,6 +167,14 @@ public enum MixBus: UInt8, CaseIterable, Identifiable, Hashable {
         case .daw10:   return "DAW 10"
         case .daw11:   return "DAW 11"
         case .daw12:   return "DAW 12"
+        case .daw13:   return "DAW 13"
+        case .daw14:   return "DAW 14"
+        case .daw15:   return "DAW 15"
+        case .daw16:   return "DAW 16"
+        case .daw17:   return "DAW 17"
+        case .daw18:   return "DAW 18"
+        case .daw19:   return "DAW 19"
+        case .daw20:   return "DAW 20"
         case .analog1: return "Analog 1"
         case .analog2: return "Analog 2"
         case .analog3: return "Analog 3"
@@ -410,7 +435,9 @@ extension ScarlettDevice {
     /// won't double-assign it — disconnect first with `.off` if needed.
     public func setMixerSource(channel: Int, source: SignalSource) throws {
         guard (0...17).contains(channel) else { throw ScarlettError.invalidArgument("mixer channel must be 0..17") }
-        let byte = profile.wireByte(for: source)
+        guard let byte = profile.supportedWireByte(for: source) else {
+            throw ScarlettError.invalidArgument("\(source.displayName) is not supported by \(profile.displayName)")
+        }
         try controlOut(
             cmd: 0x01,
             value: 0x0600 + UInt16(channel),
@@ -423,7 +450,9 @@ extension ScarlettDevice {
     /// `bus` must be one of `.m1..m6` (anything else is a no-op).
     public func setMixerGain(channel: Int, bus: MixBus, db: Double) throws {
         guard (0...17).contains(channel) else { throw ScarlettError.invalidArgument("mixer channel must be 0..17") }
-        guard let idx = bus.matrixIndex else { return }
+        guard let idx = bus.matrixIndex, idx < profile.mixBusCount else {
+            throw ScarlettError.invalidArgument("\(bus.displayName) is not supported by \(profile.displayName)")
+        }
         let mtx = UInt16(channel << 3) + UInt16(idx & 0x07)
         try controlOut(
             cmd: 0x01,
@@ -437,7 +466,12 @@ extension ScarlettDevice {
 
     /// Connect a source to one physical output route (`wValue` from `DeviceProfile.physicalOutputs`).
     public func setRouteSource(wValue: UInt16, from source: MixBus) throws {
-        let byte = profile.wireByte(for: source)
+        guard profile.physicalOutputs.contains(where: { $0.wValue == wValue }) else {
+            throw ScarlettError.invalidArgument("output route \(wValue) is not supported by \(profile.displayName)")
+        }
+        guard let byte = profile.supportedWireByte(for: source) else {
+            throw ScarlettError.invalidArgument("\(source.displayName) is not supported by \(profile.displayName)")
+        }
         try controlOut(
             cmd: 0x01,
             value: wValue,
@@ -468,7 +502,9 @@ extension ScarlettDevice {
         guard (0...maxCh).contains(channel) else {
             throw ScarlettError.invalidArgument("capture channel must be 0..\(maxCh)")
         }
-        let byte = profile.wireByte(for: source)
+        guard let byte = profile.supportedWireByte(for: source) else {
+            throw ScarlettError.invalidArgument("\(source.displayName) is not supported by \(profile.displayName)")
+        }
         try controlOut(
             cmd: 0x01,
             value: UInt16(channel),

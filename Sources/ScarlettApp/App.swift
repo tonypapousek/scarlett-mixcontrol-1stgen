@@ -84,9 +84,9 @@ private func exportSnapshot(state: MixerState) {
     // No `allowedContentTypes`: NSSavePanel would otherwise auto-append
     // the canonical extension of the chosen UTType (e.g. ".json"), which
     // mangles our `.scmx` extension into "…​.scmx.json".
-    // The extension is device-agnostic — a snapshot records whichever device
-    // was connected, so it isn't tied to a single model (older `.8i6` files
-    // still open fine; import checks contents, not the extension).
+    // The extension is device-agnostic, while the snapshot contents record the
+    // originating product ID so routes cannot be applied to the wrong model.
+    // Older `.8i6` files still open through the legacy compatibility checks.
     panel.allowsOtherFileTypes = true
     panel.nameFieldStringValue = "ScarlettSnapshot.scmx"
     panel.title = "Save Scarlett snapshot"

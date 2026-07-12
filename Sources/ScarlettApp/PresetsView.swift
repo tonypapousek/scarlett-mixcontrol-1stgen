@@ -6,6 +6,7 @@ struct PresetsView: View {
     @Bindable var state: MixerState
     @State private var newPresetName: String = ""
     @State private var confirmDelete: ScarlettPreset?
+    @State private var loadErrorMessage: String?
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -66,6 +67,17 @@ struct PresetsView: View {
             }
             Button("Cancel", role: .cancel) { confirmDelete = nil }
         }
+        .alert(
+            "Couldn’t load preset",
+            isPresented: Binding(
+                get: { loadErrorMessage != nil },
+                set: { if !$0 { loadErrorMessage = nil } }
+            )
+        ) {
+            Button("OK") { loadErrorMessage = nil }
+        } message: {
+            Text(loadErrorMessage ?? "Unknown error")
+        }
     }
 
     private var header: some View {
@@ -120,10 +132,16 @@ struct PresetsView: View {
                 Text(preset.name).font(.subheadline.bold()).foregroundStyle(Theme.textPrimary)
                 Text(Self.dateFormatter.string(from: preset.createdAt))
                     .font(.caption2).foregroundStyle(Theme.textSecondary)
+                Text(state.presetDeviceLabel(preset))
+                    .font(.caption2).foregroundStyle(Theme.textSecondary)
             }
             Spacer()
             Button {
-                state.userLoadPreset(preset)
+                do {
+                    try state.userLoadPreset(preset)
+                } catch {
+                    loadErrorMessage = error.localizedDescription
+                }
             } label: {
                 Text("Load")
                     .font(.system(size: 11, weight: .semibold))

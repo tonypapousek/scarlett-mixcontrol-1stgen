@@ -26,6 +26,11 @@ MACOS_DIR="$CONTENTS/MacOS"
 RESOURCES_DIR="$CONTENTS/Resources"
 BUNDLE_ID="dev.marekkramar.ScarlettMixControl"
 EXE_NAME="ScarlettMixControl"
+# Version shown in-app and in the bundle. Override via APP_VERSION (CI injects
+# the release tag); strip a leading "v" so "v0.2.0-beta.3" → "0.2.0-beta.3".
+APP_VERSION="${APP_VERSION:-0.2.0}"
+APP_VERSION="${APP_VERSION#v}"
+APP_BUILD="${APP_BUILD:-2}"
 ICON_SRC="$REPO_ROOT/Sources/ScarlettApp/Resources/AppIcon.png"
 ICONSET_DIR="$BUILD_ROOT/AppIcon.iconset"
 ICNS_FILE="$RESOURCES_DIR/AppIcon.icns"
@@ -83,8 +88,8 @@ cat > "$CONTENTS/Info.plist" <<EOF
     <key>CFBundleIconFile</key>       <string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
     <key>CFBundlePackageType</key>    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>    <string>0.1</string>
-    <key>CFBundleVersion</key>        <string>1</string>
+    <key>CFBundleShortVersionString</key>    <string>$APP_VERSION</string>
+    <key>CFBundleVersion</key>        <string>$APP_BUILD</string>
     <key>LSMinimumSystemVersion</key> <string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key>       <string>NSApplication</string>
