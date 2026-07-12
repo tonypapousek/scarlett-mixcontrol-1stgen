@@ -5,12 +5,18 @@ import ScarlettCore
 ///
 /// Top bar: bus tabs (Mix M1..Mn).
 /// Below: horizontally scrolling row of `ChannelStrip`s, one per matrix
-/// channel that we expose to the user (first 14 of the 18 protocol slots —
-/// the rest aren't useful on the 8i6).
+/// channel we expose.  We show at least 14 (the 8i6-era default), and expand
+/// to cover every physical input on devices that have more — the 18i6/18i8/
+/// 18i20 have 18 real inputs, so all 18 matrix slots are useful there.
 @MainActor
 struct MatrixMixerView: View {
     @Bindable var state: MixerState
-    private let visibleChannels = 0..<14
+    private var visibleChannels: Range<Int> {
+        let physicalInputs = state.profile.sources.filter {
+            $0.category == .analog || $0.category == .digital
+        }.count
+        return 0..<min(state.profile.matrixInputCount, max(14, physicalInputs))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

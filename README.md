@@ -100,16 +100,16 @@ For dev iteration without packaging: `swift run scarlett-app`. There's also a `s
 
 | Device                       | Status                                               |
 | ---------------------------- | ---------------------------------------------------- |
-| **Scarlett 8i6** _(1st gen)_ | ✅ &nbsp; Officially supported — tested on macOS 14+ |
-| Scarlett 18i8 _(1st gen)_    | 🟢 &nbsp; Beta — driven; awaiting hardware confirmation |
-| Scarlett 18i6 _(1st gen)_    | 🟢 &nbsp; Beta — driven; awaiting hardware confirmation |
-| Scarlett 18i20 _(1st gen)_   | 🟢 &nbsp; Beta — driven; awaiting hardware confirmation |
+| **Scarlett 8i6** _(1st gen)_ | ✅ &nbsp; Confirmed on hardware — tested on macOS 14+ |
 | Scarlett 6i6 _(1st gen)_     | 🟢 &nbsp; Beta — driven; awaiting hardware confirmation |
+| Scarlett 18i6 _(1st gen)_    | 🟢 &nbsp; Beta — driven; awaiting hardware confirmation |
+| **Scarlett 18i8** _(1st gen)_ | ✅ &nbsp; Confirmed on hardware (thanks @Nas3nmann)   |
+| Scarlett 18i20 _(1st gen)_   | 🟢 &nbsp; Beta — driven; awaiting hardware confirmation |
 | Scarlett 16i8 _(1st gen)_    | ⚪ &nbsp; Prototype SKU — no shipping USB ID to detect |
 | Scarlett 2nd / 3rd / 4th gen | ❌ &nbsp; Different protocol — won't work            |
 | Saffire (FireWire) family    | ❌ &nbsp; Different transport — won't work           |
 
-> 🟢 Every shipping 1st-gen USB Scarlett is now driven with byte tables extracted from the original MixControl binary. Only the **8i6** has been confirmed on real hardware so far — the rest are wired up but need an owner to verify. Grab a [pre-release](https://github.com/MarecekW/scarlett-mixcontrol-1stgen/releases) and [open an issue](https://github.com/MarecekW/scarlett-mixcontrol-1stgen/issues) if anything's off.
+> 🟢 Every shipping 1st-gen USB Scarlett is driven with byte tables extracted from the original MixControl binary. The **8i6** and **18i8** are confirmed on real hardware; the rest are wired up but need an owner to verify. Grab a [pre-release](https://github.com/MarecekW/scarlett-mixcontrol-1stgen/releases) and [open an issue](https://github.com/MarecekW/scarlett-mixcontrol-1stgen/issues) if anything's off.
 
 <br/>
 

@@ -280,7 +280,7 @@ let unmuteBytes: [UInt8] = [0x00, 0x00]
 // MARK: - Peak readings
 
 public struct PeakReading {
-    public var inputs: [Double]   // 18 values (only first 8 meaningful on 8i6)
+    public var inputs: [Double]   // 18 meter slots; how many are meaningful depends on the device
     public var daw: [Double]      // 6 values
     public var mixer: [Double]    // 8 values
 

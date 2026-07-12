@@ -44,8 +44,9 @@ struct ChannelStrip: View {
 
     // MARK: - Contextual hardware-input switch
     //
-    // When this strip's source is one of the 8i6's software-configurable
-    // hardware inputs, surface the relevant switch right here on the strip
+    // When this strip's source is one of the device's software-configurable
+    // hardware inputs (per profile.impedanceChannels / hiLoChannels), surface
+    // the relevant switch right here on the strip
     // so the user doesn't have to navigate elsewhere.  Otherwise reserve
     // the same vertical space (an empty placeholder) to keep strip heights
     // consistent across the row.
@@ -287,13 +288,6 @@ struct StripMeter: View {
     static func level(from peaks: PeakReading, source: SignalSource, profile: DeviceProfile) -> Double {
         let bus = MixBus(rawValue: source.rawValue) ?? .off
         return peaks.level(for: bus, profile: profile)
-    }
-}
-
-extension PeakReading {
-    /// 8i6 fallback meter lookup (legacy call sites).
-    func level(for source: MixBus) -> Double {
-        level(for: source, profile: .scarlett8i6)
     }
 }
 

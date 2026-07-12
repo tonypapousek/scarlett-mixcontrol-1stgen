@@ -35,7 +35,7 @@ final class MixerState {
     /// Mix buses M1..Mn for the connected device.
     var matrixBuses: [MixBus] { profile.matrixOutputBuses }
 
-    /// Stereo pairs in the matrix (3 on 8i6, 4 on 18i8).
+    /// Stereo pairs in the matrix (3 on the 6-bus 8i6/18i6, 4 on the 8-bus 18i8/18i20/6i6).
     var stereoPairCount: Int { profile.stereoPairCount }
 
     /// Sources shown in matrix-channel pickers for the connected device.
@@ -155,7 +155,7 @@ final class MixerState {
         4: .spdif1,  5: .spdif2,
     ]
 
-    // Matrix mixer: 18 input channels × 6 mix buses (M1..M6).  The user-
+    // Matrix mixer: 18 input channels × N mix buses (6 or 8, per profile.mixBusCount).  The user-
     // facing knobs are `mixerLevels` + `mixerPans` + `mixerMutes` +
     // `mixerSolos`.  The per-cell gain actually sent to the device is
     // computed on demand by `effectiveGain(...)` from those four fields.
@@ -1178,7 +1178,7 @@ final class MixerState {
         )
     }
 
-    /// Export the current state to a `.8i6` file at the given URL.  The file
+    /// Export the current state to a `.scmx` file at the given URL.  The file
     /// format is JSON-encoded `ScarlettPreset` for cross-compatibility with
     /// the in-app preset list (you can save a file, then load it back as a
     /// preset and vice versa).
@@ -1191,7 +1191,7 @@ final class MixerState {
         logEvent(.info, "Export", "Exported snapshot to \(url.lastPathComponent)")
     }
 
-    /// Import a `.8i6` snapshot file from the given URL and apply it
+    /// Import a `.scmx` (or legacy `.8i6`) snapshot file from the given URL and apply it
     /// (routes + matrix + sources) the same way `userLoadPreset` does.
     func userImportSnapshot(from url: URL) throws {
         let data = try Data(contentsOf: url)
@@ -1216,10 +1216,14 @@ final class MixerState {
         let p = profile
         ensureRouteSlots(for: p)
 
-        // 18i8 factory routing sends Monitor + Phones through Mix M1/M2
-        // (matrix must be heard at the physical outputs).  8i6 defaults keep
-        // DAW 1/2 direct for immediate Mac playback.
-        let useMixOutputs = p.productID == 0x8014
+        // The larger ADAT-equipped models (18i6/18i8/18i20) default their
+        // Monitor + Phones through Mix M1/M2 (the matrix must be heard at the
+        // physical outputs) and seed the matrix with all 8 analog + ADAT +
+        // S/PDIF inputs.  The compact models (8i6/6i6) keep DAW 1/2 direct for
+        // immediate Mac playback and seed 4 analog + S/PDIF.  We key off ADAT
+        // rather than a specific PID so every model lands on the right preset.
+        let hasADAT = p.sources.contains { $0.displayName.hasPrefix("ADAT") }
+        let useMixOutputs = hasADAT
         for out in p.physicalOutputs {
             let source: MixBus
             switch out.wValue {
@@ -1243,7 +1247,7 @@ final class MixerState {
         linkedPairs = []
 
         var defaultSources: [SignalSource] = Array(repeating: .off, count: 18)
-        if p.productID == 0x8014 {
+        if hasADAT {
             defaultSources[0] = .analog1; defaultSources[1] = .analog2
             defaultSources[2] = .analog3; defaultSources[3] = .analog4
             defaultSources[4] = .analog5; defaultSources[5] = .analog6
@@ -1281,7 +1285,7 @@ final class MixerState {
 
         captureRoutes.removeAll(keepingCapacity: true)
         let captureDefaults: [(Int, MixBus)]
-        if p.productID == 0x8014 {
+        if hasADAT {
             captureDefaults = [
                 (0, .analog1), (1, .analog2), (2, .analog3), (3, .analog4),
                 (4, .spdif1),  (5, .spdif2),

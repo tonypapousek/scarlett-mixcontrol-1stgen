@@ -527,7 +527,7 @@ struct DeviceView: View {
                                 .font(.subheadline.monospacedDigit())
                                 .foregroundStyle(Theme.textSecondary)
                         }
-                        Text("A community replacement for Focusrite's 32-bit MixControl, which doesn't run on modern macOS.")
+                        Text("A community replacement for Focusrite's discontinued MixControl, which still launches on modern macOS but no longer detects the hardware.")
                             .font(.caption).foregroundStyle(Theme.textSecondary)
                         Text("Built by @MarecekW.")
                             .font(.caption).foregroundStyle(Theme.textSecondary)
@@ -538,30 +538,28 @@ struct DeviceView: View {
                         Text("Compatibility")
                             .font(.subheadline.bold())
                             .foregroundStyle(Theme.textPrimary)
-                        Text("Original MixControl supported six 1st-generation Scarlett interfaces. This build supports the 8i6 and 18i8; the others share the protocol family but need per-model byte tables.")
+                        Text("This build drives every shipping 1st-generation USB Scarlett, with byte tables extracted from the original MixControl. The 8i6 and 18i8 are confirmed on hardware; the rest are beta and need an owner to verify.")
                             .font(.caption)
                             .foregroundStyle(Theme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.bottom, 2)
                         VStack(alignment: .leading, spacing: 3) {
-                            compatRow(symbol: "checkmark.circle.fill",
-                                      color: .green,
-                                      text: "Scarlett 8i6 — tested")
-                            compatRow(symbol: "checkmark.circle.fill",
-                                      color: .green,
-                                      text: "Scarlett 18i8 — supported (byte tables verified vs Linux driver)")
-                            compatRow(symbol: "questionmark.circle",
-                                      color: .orange,
-                                      text: "Scarlett 6i6 — supported by original MixControl, not yet ported")
-                            compatRow(symbol: "questionmark.circle",
-                                      color: .orange,
-                                      text: "Scarlett 16i8 — supported by original MixControl, not yet ported")
-                            compatRow(symbol: "questionmark.circle",
-                                      color: .orange,
-                                      text: "Scarlett 18i6 — supported by original MixControl, not yet ported")
-                            compatRow(symbol: "questionmark.circle",
-                                      color: .orange,
-                                      text: "Scarlett 18i20 — supported by original MixControl, not yet ported")
+                            // Data-driven from the profile list so it can't go stale
+                            // as devices are added or promoted. Confirmed (not
+                            // experimental) devices first, then beta, each alphabetical.
+                            let devices = DeviceProfile.all.sorted { a, b in
+                                a.isExperimental != b.isExperimental
+                                    ? !a.isExperimental
+                                    : a.displayName < b.displayName
+                            }
+                            ForEach(devices, id: \.productID) { p in
+                                let name = p.displayName.replacingOccurrences(of: " (1st gen)", with: "")
+                                compatRow(symbol: p.isExperimental ? "circle.dashed" : "checkmark.circle.fill",
+                                          color: p.isExperimental ? .orange : .green,
+                                          text: p.isExperimental
+                                              ? "\(name) — beta, needs hardware confirmation"
+                                              : "\(name) — confirmed on hardware")
+                            }
                             compatRow(symbol: "xmark.circle.fill",
                                       color: .red,
                                       text: "2nd / 3rd / 4th-gen Scarletts — different protocol, won't work")
@@ -707,7 +705,7 @@ struct ConnectionOverlayCard: View {
                 .orange,
                 "antenna.radiowaves.left.and.right.slash",
                 "Waiting for Scarlett",
-                "Plug a supported 1st-gen Scarlett in via USB (8i6 or 18i8). The app will reconnect automatically."
+                "Plug in a 1st-gen Scarlett (8i6, 6i6, 18i6, 18i8, or 18i20) via USB. The app will reconnect automatically."
             )
         case .disconnected(let reason):
             return (
@@ -721,7 +719,7 @@ struct ConnectionOverlayCard: View {
                 .yellow,
                 "exclamationmark.triangle.fill",
                 "\(p.displayName) detected — not yet supported",
-                "This build supports the Scarlett 8i6 and 18i8 (1st gen). We've detected your \(p.displayName) on the bus but can't drive its mixer yet — the byte mappings differ between models.\n\nIf you'd like to help port another model, the project is open source and the byte tables can be extracted from the original MixControl binary — see the README."
+                "This build drives the five shipping 1st-gen USB Scarletts (8i6, 6i6, 18i6, 18i8, 18i20). We've detected your \(p.displayName) on the bus but don't have a byte table for it yet.\n\nIf you'd like to help add it, the project is open source and the byte tables can be extracted from the original MixControl binary — see the README."
             )
         }
     }

@@ -4,7 +4,8 @@ import ScarlettCore
 /// A complete snapshot of every user-controllable bit of state — exactly the
 /// stuff a person would want to recall as "my podcast setup" or "tracking
 /// drums today".  Persisted in UserDefaults (in-app preset list) and as
-/// `.8i6` JSON files via the File menu (Save snapshot / Open snapshot).
+/// `.scmx` JSON files via the File menu (Save snapshot / Open snapshot).
+/// (Older `.8i6` snapshots still open — import is content-based, not by extension.)
 public struct ScarlettPreset: Codable, Identifiable, Hashable {
     public let id: UUID
     public var name: String

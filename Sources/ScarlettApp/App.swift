@@ -83,9 +83,12 @@ private func exportSnapshot(state: MixerState) {
     let panel = NSSavePanel()
     // No `allowedContentTypes`: NSSavePanel would otherwise auto-append
     // the canonical extension of the chosen UTType (e.g. ".json"), which
-    // mangles our `.8i6` extension into "ScarlettSnapshot.8i6.json".
+    // mangles our `.scmx` extension into "…​.scmx.json".
+    // The extension is device-agnostic — a snapshot records whichever device
+    // was connected, so it isn't tied to a single model (older `.8i6` files
+    // still open fine; import checks contents, not the extension).
     panel.allowsOtherFileTypes = true
-    panel.nameFieldStringValue = "ScarlettSnapshot.8i6"
+    panel.nameFieldStringValue = "ScarlettSnapshot.scmx"
     panel.title = "Save Scarlett snapshot"
     if panel.runModal() == .OK, let url = panel.url {
         do { try state.userExportSnapshot(to: url) }
@@ -98,8 +101,8 @@ private func exportSnapshot(state: MixerState) {
 @MainActor
 private func importSnapshot(state: MixerState) {
     let panel = NSOpenPanel()
-    // No content-type filter — the user might have a `.8i6` file or a
-    // `.json` file (both are valid, contents are checked at decode time).
+    // No content-type filter — the user might have a `.scmx`, an older
+    // `.8i6`, or a `.json` file (all valid; contents are checked at decode time).
     panel.allowsMultipleSelection = false
     panel.title = "Open Scarlett snapshot"
     if panel.runModal() == .OK, let url = panel.url {
