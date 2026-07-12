@@ -450,7 +450,7 @@ struct DeviceView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Clock source").font(.subheadline).foregroundStyle(Theme.textPrimary)
                             ThemedMenuPicker(
-                                options: state.profile.productID == 0x8014 || state.profile.productID == 0x8004
+                                options: state.profile.sources.contains { $0.displayName.hasPrefix("ADAT") }
                                     ? [ClockSource.internalClock, .spdif, .adat]
                                     : [ClockSource.internalClock, .spdif],
                                 displayName: { $0.displayName },

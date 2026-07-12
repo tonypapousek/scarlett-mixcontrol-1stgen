@@ -101,15 +101,15 @@ For dev iteration without packaging: `swift run scarlett-app`. There's also a `s
 | Device                       | Status                                               |
 | ---------------------------- | ---------------------------------------------------- |
 | **Scarlett 8i6** _(1st gen)_ | ✅ &nbsp; Officially supported — tested on macOS 14+ |
-| Scarlett 6i6 _(1st gen)_     | 🟡 &nbsp; Detected, support pending                  |
-| Scarlett 16i8 _(1st gen)_    | 🟡 &nbsp; Detected, support pending                  |
-| Scarlett 18i6 _(1st gen)_    | 🟡 &nbsp; Detected, support pending                  |
-| Scarlett 18i8 _(1st gen)_    | 🟡 &nbsp; Detected, support pending                  |
-| Scarlett 18i20 _(1st gen)_   | 🟡 &nbsp; Detected, support pending                  |
+| Scarlett 18i8 _(1st gen)_    | 🟢 &nbsp; Beta — driven; awaiting hardware confirmation |
+| Scarlett 18i6 _(1st gen)_    | 🟢 &nbsp; Beta — driven; awaiting hardware confirmation |
+| Scarlett 18i20 _(1st gen)_   | 🟢 &nbsp; Beta — driven; awaiting hardware confirmation |
+| Scarlett 6i6 _(1st gen)_     | 🟢 &nbsp; Beta — driven; awaiting hardware confirmation |
+| Scarlett 16i8 _(1st gen)_    | ⚪ &nbsp; Prototype SKU — no shipping USB ID to detect |
 | Scarlett 2nd / 3rd / 4th gen | ❌ &nbsp; Different protocol — won't work            |
 | Saffire (FireWire) family    | ❌ &nbsp; Different transport — won't work           |
 
-> 🟡 The app will _recognise_ other 1st-gen Scarletts on the bus and show a friendly "not yet supported" screen — it won't try to drive them with the wrong byte tables.
+> 🟢 Every shipping 1st-gen USB Scarlett is now driven with byte tables extracted from the original MixControl binary. Only the **8i6** has been confirmed on real hardware so far — the rest are wired up but need an owner to verify. Grab a [pre-release](https://github.com/MarecekW/scarlett-mixcontrol-1stgen/releases) and [open an issue](https://github.com/MarecekW/scarlett-mixcontrol-1stgen/issues) if anything's off.
 
 <br/>
 
@@ -146,13 +146,13 @@ For full deep-dive, read the commit history — `d175367` (the matrix-mixer brea
 
 ## 🤝 Contributing
 
-The biggest open item is **support for the other 1st-gen Scarletts** — 6i6, 16i8, 18i6, 18i8, 18i20. The infrastructure is in place (`DeviceProfile` system, USB PID detection), but each device needs:
+Every shipping 1st-gen USB Scarlett (8i6, 18i6, 18i8, 18i20, 6i6) now has a `DeviceProfile` with byte tables extracted from MixControl's binary, and the app will drive all of them. The remaining open item is **hardware validation** — only the 8i6 has been confirmed on a real unit. If you own one of the others:
 
-1. **Its byte tables extracted** from MixControl's binary (or transcribed from `Sources/ScarlettCore/DeviceProfile.swift` — drafts for 18i6 and 18i8 are already there from disassembly).
-2. **Validation against real hardware** — without testing, every port is theoretical.
-3. **UI dimensions wired up** — array sizing in `MixerState` (currently hardcoded for 6 mix buses) and channel/output counts in views need to derive from the connected device's profile.
+1. Grab a [pre-release](https://github.com/MarecekW/scarlett-mixcontrol-1stgen/releases) and connect your device.
+2. Check that inputs/outputs are labelled correctly, faders move the right channels, and meters track the right signals.
+3. [Open an issue](https://github.com/MarecekW/scarlett-mixcontrol-1stgen/issues/new) with anything that's wrong — that's exactly the feedback that promotes a device from 🟢 beta to ✅ confirmed.
 
-If you have one of these devices and want to help, [open an issue](https://github.com/MarecekW/scarlett-mixcontrol-1stgen/issues/new) or send a PR.
+(There's also a non-shipping "16i8" table in the MixControl binary, but it has no USB product ID in the firmware's device dispatch, so there's no hardware to detect.)
 
 <br/>
 

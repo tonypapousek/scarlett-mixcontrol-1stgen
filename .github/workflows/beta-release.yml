@@ -94,7 +94,7 @@ jobs:
 
             ### Supported hardware (this branch)
             - Scarlett **8i6** (1st gen) — previously verified; re-testing after the device-profile refactor
-            - Scarlett **18i8** (1st gen) — beta support
+            - Scarlett **18i8** / **18i6** / **18i20** / **6i6** (1st gen) — beta; byte tables extracted from MixControl, awaiting hardware confirmation
 
             ### Build info
             | | |

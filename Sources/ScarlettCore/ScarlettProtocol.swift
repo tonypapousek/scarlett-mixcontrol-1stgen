@@ -585,6 +585,10 @@ func val16ToDb(_ v: UInt16) -> Double {
 
 func decodePeaks(_ bytes: [UInt8], count: Int) -> [Double] {
     (0..<count).map { i in
+        // Defensive: a device may return a shorter payload than requested
+        // (especially the experimental large-I/O profiles). Treat missing
+        // slots as silence rather than reading out of bounds.
+        guard 2*i + 1 < bytes.count else { return -.infinity }
         let lo = UInt16(bytes[2*i])
         let hi = UInt16(bytes[2*i + 1])
         return val16ToDb((hi << 8) | lo)

@@ -109,10 +109,10 @@ extension DeviceProfile {
 
     /// All known profiles in this build.  Detection at connect time
     /// matches the device's USB PID against these.
-    public static let all: [DeviceProfile] = [.scarlett8i6, .scarlett18i8, .scarlett18i6]
+    public static let all: [DeviceProfile] = [.scarlett8i6, .scarlett18i8, .scarlett6i6, .scarlett18i20, .scarlett18i6]
 
     /// Profiles the app will actively drive (matrix, routing, meters).
-    public static let supported: [DeviceProfile] = [.scarlett8i6, .scarlett18i8]
+    public static let supported: [DeviceProfile] = [.scarlett8i6, .scarlett18i8, .scarlett6i6, .scarlett18i20, .scarlett18i6]
 
     /// True when this build will open the device and run the full UI flow.
     public var isSupported: Bool { Self.supported.contains { $0.productID == productID } }
@@ -218,7 +218,7 @@ extension DeviceProfile {
             .init(wValue: 4, displayName: "S/PDIF L",   pairLabel: "S/PDIF",  isLeft: true),
             .init(wValue: 5, displayName: "S/PDIF R",   pairLabel: "S/PDIF",  isLeft: false),
         ],
-        captureChannelCount: 14,    // 14 ToHost slots in MixControl's OpSigTab
+        captureChannelCount: 18,    // 18 ToHost slots in USB26Tracker_OpSigTab
         loopbackChannelCount: 0,    // no Loop. entries in OpSigTab kind=3 list
         impedanceChannels: [1, 2],  // Inputs 1+2 are combo jacks (mic preamp)
         hiLoChannels: [],           // 18i6 has separate Hi-Z buttons on mics, not Hi/Lo
@@ -287,6 +287,160 @@ extension DeviceProfile {
         captureChannelCount: 14,
         loopbackChannelCount: 2,
         impedanceChannels: [1, 2],
+        hiLoChannels: [],
+        hasMonitorMono: false
+    )
+
+    // ---- Scarlett 6i6 1st gen (Saffire6i6 table) — EXPERIMENTAL -------
+    //
+    // 4 analog (2 combo mic/line + 2 line) + 2 S/PDIF = 6 inputs; 6 DAW
+    // playback.  Matrix is 18 × 8 (MixControl exposes 4 stereo mixes).
+    // 6 routable outputs: Monitor + Phones + S/PDIF.
+    //
+    // Bytes extracted from MixControl 1.10.6's `Saffire6i6_IpSigTab` /
+    // `_OpSigTab`.  The class is named "Saffire6i6" for legacy reasons but
+    // its `getDeviceTitle()` returns "Scarlett 6i6"; PID 0x8012 confirmed
+    // both from the binary's own device dispatch (`cmpl $0x8012`) and the
+    // DeviceHunt USB database.  Analog 1-4 = 0x0c..0x0f, S/PDIF = 0x10/0x11,
+    // DAW = 0x00..0x0b, Mix M1..M8 = 0x12..0x19.
+    public static let scarlett6i6 = DeviceProfile(
+        productID: 0x8012,
+        internalName: "Saffire6i6",
+        displayName: "Scarlett 6i6 (1st gen)",
+        isExperimental: true,
+        matrixInputCount: 18,
+        mixBusCount: 8,
+        sources: [
+            .init(byte: 0xff, displayName: "Off",       category: .off),
+            .init(byte: 0x0c, displayName: "Analog 1",  category: .analog),
+            .init(byte: 0x0d, displayName: "Analog 2",  category: .analog),
+            .init(byte: 0x0e, displayName: "Analog 3",  category: .analog),
+            .init(byte: 0x0f, displayName: "Analog 4",  category: .analog),
+            .init(byte: 0x10, displayName: "S/PDIF 1",  category: .digital),
+            .init(byte: 0x11, displayName: "S/PDIF 2",  category: .digital),
+            .init(byte: 0x00, displayName: "DAW 1",     category: .daw),
+            .init(byte: 0x01, displayName: "DAW 2",     category: .daw),
+            .init(byte: 0x02, displayName: "DAW 3",     category: .daw),
+            .init(byte: 0x03, displayName: "DAW 4",     category: .daw),
+            .init(byte: 0x04, displayName: "DAW 5",     category: .daw),
+            .init(byte: 0x05, displayName: "DAW 6",     category: .daw),
+            .init(byte: 0x12, displayName: "Mix M1",    category: .mixOutput),
+            .init(byte: 0x13, displayName: "Mix M2",    category: .mixOutput),
+            .init(byte: 0x14, displayName: "Mix M3",    category: .mixOutput),
+            .init(byte: 0x15, displayName: "Mix M4",    category: .mixOutput),
+            .init(byte: 0x16, displayName: "Mix M5",    category: .mixOutput),
+            .init(byte: 0x17, displayName: "Mix M6",    category: .mixOutput),
+            .init(byte: 0x18, displayName: "Mix M7",    category: .mixOutput),
+            .init(byte: 0x19, displayName: "Mix M8",    category: .mixOutput),
+        ],
+        physicalOutputs: [
+            .init(wValue: 0, displayName: "Monitor L",   pairLabel: "Monitor", isLeft: true),
+            .init(wValue: 1, displayName: "Monitor R",   pairLabel: "Monitor", isLeft: false),
+            .init(wValue: 2, displayName: "Phones L",    pairLabel: "Phones",  isLeft: true),
+            .init(wValue: 3, displayName: "Phones R",    pairLabel: "Phones",  isLeft: false),
+            .init(wValue: 4, displayName: "S/PDIF L",    pairLabel: "S/PDIF",  isLeft: true),
+            .init(wValue: 5, displayName: "S/PDIF R",    pairLabel: "S/PDIF",  isLeft: false),
+        ],
+        captureChannelCount: 6,
+        loopbackChannelCount: 0,
+        impedanceChannels: [1, 2],  // 2 combo mic/line inputs
+        hiLoChannels: [],
+        hasMonitorMono: false
+    )
+
+    // ---- Scarlett 18i20 1st gen (Saffire18i20 table) — EXPERIMENTAL ---
+    //
+    // 8 analog + 2 S/PDIF + 8 ADAT = 18 inputs; 20 DAW playback.  Matrix is
+    // 18 × 8.  20 physical outputs: Monitor + 8 line + S/PDIF + 8 ADAT.
+    //
+    // Bytes extracted from MixControl 1.10.6's `Saffire18i20_IpSigTab` /
+    // `_OpSigTab` (getDeviceTitle() → "Scarlett 18i20").  PID 0x800c
+    // confirmed from the binary's device dispatch and the Linux gen-1 driver.
+    // Note: this is the *1st-gen* 18i20 — the 2nd-gen unit is a different
+    // protocol entirely and is NOT this device.
+    // Analog 1-8 = 0x14..0x1b, S/PDIF = 0x1c/0x1d, ADAT 1-8 = 0x1e..0x25,
+    // DAW 1-20 = 0x00..0x13, Mix M1..M8 = 0x26..0x2d.
+    public static let scarlett18i20 = DeviceProfile(
+        productID: 0x800c,
+        internalName: "Saffire18i20",
+        displayName: "Scarlett 18i20 (1st gen)",
+        isExperimental: true,
+        matrixInputCount: 18,
+        mixBusCount: 8,
+        sources: [
+            .init(byte: 0xff, displayName: "Off",       category: .off),
+            .init(byte: 0x14, displayName: "Analog 1",  category: .analog),
+            .init(byte: 0x15, displayName: "Analog 2",  category: .analog),
+            .init(byte: 0x16, displayName: "Analog 3",  category: .analog),
+            .init(byte: 0x17, displayName: "Analog 4",  category: .analog),
+            .init(byte: 0x18, displayName: "Analog 5",  category: .analog),
+            .init(byte: 0x19, displayName: "Analog 6",  category: .analog),
+            .init(byte: 0x1a, displayName: "Analog 7",  category: .analog),
+            .init(byte: 0x1b, displayName: "Analog 8",  category: .analog),
+            .init(byte: 0x1c, displayName: "S/PDIF 1",  category: .digital),
+            .init(byte: 0x1d, displayName: "S/PDIF 2",  category: .digital),
+            .init(byte: 0x1e, displayName: "ADAT 1",    category: .digital),
+            .init(byte: 0x1f, displayName: "ADAT 2",    category: .digital),
+            .init(byte: 0x20, displayName: "ADAT 3",    category: .digital),
+            .init(byte: 0x21, displayName: "ADAT 4",    category: .digital),
+            .init(byte: 0x22, displayName: "ADAT 5",    category: .digital),
+            .init(byte: 0x23, displayName: "ADAT 6",    category: .digital),
+            .init(byte: 0x24, displayName: "ADAT 7",    category: .digital),
+            .init(byte: 0x25, displayName: "ADAT 8",    category: .digital),
+            .init(byte: 0x00, displayName: "DAW 1",     category: .daw),
+            .init(byte: 0x01, displayName: "DAW 2",     category: .daw),
+            .init(byte: 0x02, displayName: "DAW 3",     category: .daw),
+            .init(byte: 0x03, displayName: "DAW 4",     category: .daw),
+            .init(byte: 0x04, displayName: "DAW 5",     category: .daw),
+            .init(byte: 0x05, displayName: "DAW 6",     category: .daw),
+            .init(byte: 0x06, displayName: "DAW 7",     category: .daw),
+            .init(byte: 0x07, displayName: "DAW 8",     category: .daw),
+            .init(byte: 0x08, displayName: "DAW 9",     category: .daw),
+            .init(byte: 0x09, displayName: "DAW 10",    category: .daw),
+            .init(byte: 0x0a, displayName: "DAW 11",    category: .daw),
+            .init(byte: 0x0b, displayName: "DAW 12",    category: .daw),
+            .init(byte: 0x0c, displayName: "DAW 13",    category: .daw),
+            .init(byte: 0x0d, displayName: "DAW 14",    category: .daw),
+            .init(byte: 0x0e, displayName: "DAW 15",    category: .daw),
+            .init(byte: 0x0f, displayName: "DAW 16",    category: .daw),
+            .init(byte: 0x10, displayName: "DAW 17",    category: .daw),
+            .init(byte: 0x11, displayName: "DAW 18",    category: .daw),
+            .init(byte: 0x12, displayName: "DAW 19",    category: .daw),
+            .init(byte: 0x13, displayName: "DAW 20",    category: .daw),
+            .init(byte: 0x26, displayName: "Mix M1",    category: .mixOutput),
+            .init(byte: 0x27, displayName: "Mix M2",    category: .mixOutput),
+            .init(byte: 0x28, displayName: "Mix M3",    category: .mixOutput),
+            .init(byte: 0x29, displayName: "Mix M4",    category: .mixOutput),
+            .init(byte: 0x2a, displayName: "Mix M5",    category: .mixOutput),
+            .init(byte: 0x2b, displayName: "Mix M6",    category: .mixOutput),
+            .init(byte: 0x2c, displayName: "Mix M7",    category: .mixOutput),
+            .init(byte: 0x2d, displayName: "Mix M8",    category: .mixOutput),
+        ],
+        physicalOutputs: [
+            .init(wValue: 0x00, displayName: "Monitor L",  pairLabel: "Monitor",   isLeft: true),
+            .init(wValue: 0x01, displayName: "Monitor R",  pairLabel: "Monitor",   isLeft: false),
+            .init(wValue: 0x02, displayName: "Line Out 3", pairLabel: "Line 3+4",  isLeft: true),
+            .init(wValue: 0x03, displayName: "Line Out 4", pairLabel: "Line 3+4",  isLeft: false),
+            .init(wValue: 0x04, displayName: "Line Out 5", pairLabel: "Line 5+6",  isLeft: true),
+            .init(wValue: 0x05, displayName: "Line Out 6", pairLabel: "Line 5+6",  isLeft: false),
+            .init(wValue: 0x06, displayName: "Line Out 7", pairLabel: "Line 7+8",  isLeft: true),
+            .init(wValue: 0x07, displayName: "Line Out 8", pairLabel: "Line 7+8",  isLeft: false),
+            .init(wValue: 0x08, displayName: "Line Out 9", pairLabel: "Line 9+10", isLeft: true),
+            .init(wValue: 0x09, displayName: "Line Out 10",pairLabel: "Line 9+10", isLeft: false),
+            .init(wValue: 0x0a, displayName: "S/PDIF L",   pairLabel: "S/PDIF",    isLeft: true),
+            .init(wValue: 0x0b, displayName: "S/PDIF R",   pairLabel: "S/PDIF",    isLeft: false),
+            .init(wValue: 0x0c, displayName: "ADAT 1",     pairLabel: "ADAT 1+2",  isLeft: true),
+            .init(wValue: 0x0d, displayName: "ADAT 2",     pairLabel: "ADAT 1+2",  isLeft: false),
+            .init(wValue: 0x0e, displayName: "ADAT 3",     pairLabel: "ADAT 3+4",  isLeft: true),
+            .init(wValue: 0x0f, displayName: "ADAT 4",     pairLabel: "ADAT 3+4",  isLeft: false),
+            .init(wValue: 0x10, displayName: "ADAT 5",     pairLabel: "ADAT 5+6",  isLeft: true),
+            .init(wValue: 0x11, displayName: "ADAT 6",     pairLabel: "ADAT 5+6",  isLeft: false),
+            .init(wValue: 0x12, displayName: "ADAT 7",     pairLabel: "ADAT 7+8",  isLeft: true),
+            .init(wValue: 0x13, displayName: "ADAT 8",     pairLabel: "ADAT 7+8",  isLeft: false),
+        ],
+        captureChannelCount: 18,
+        loopbackChannelCount: 0,
+        impedanceChannels: [],   // 8 mic pres; inst/pad switches unverified
         hiLoChannels: [],
         hasMonitorMono: false
     )
@@ -361,6 +515,23 @@ extension DeviceProfile {
             case 0x06...0x0d: return Int(byte - 0x06)
             case 0x0e: return 8; case 0x0f: return 9
             case 0x10...0x17: return Int(byte - 0x10 + 10)
+            default: return nil
+            }
+        case 0x8012: // 6i6 — 4 analog @ 0x0c–0x0f, S/PDIF @ 0x10–0x11.
+            // Meter slots assumed to mirror the 8i6 (its closest analog+S/PDIF
+            // sibling); unverified on hardware — a tester should confirm.
+            switch byte {
+            case 0x0c: return 0; case 0x0d: return 1
+            case 0x0e: return 2; case 0x0f: return 3
+            case 0x10: return 8; case 0x11: return 9
+            default: return nil
+            }
+        case 0x800c: // 18i20 — 8 analog @ 0x14–0x1b, S/PDIF @ 0x1c–0x1d, ADAT @ 0x1e–0x25.
+            // Meter slots assumed to follow the 18i8/18i6 shape; unverified.
+            switch byte {
+            case 0x14...0x1b: return Int(byte - 0x14)
+            case 0x1c: return 8; case 0x1d: return 9
+            case 0x1e...0x25: return Int(byte - 0x1e + 10)
             default: return nil
             }
         default:
