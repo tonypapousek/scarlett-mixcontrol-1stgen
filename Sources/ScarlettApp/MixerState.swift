@@ -642,7 +642,7 @@ final class MixerState {
         }
     }
 
-    private func savePresets() {
+    func savePresets() {
         if let data = try? JSONEncoder().encode(presets) {
             UserDefaults.standard.set(data, forKey: Self.presetsKey)
         }

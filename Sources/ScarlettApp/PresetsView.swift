@@ -7,7 +7,12 @@ struct PresetsView: View {
     @State private var newPresetName: String = ""
     @State private var confirmDelete: ScarlettPreset?
     @State private var loadErrorMessage: String?
-    @AppStorage("scarlett.autoBackupOnReset") private var autoBackupOnReset = true
+    @State private var renamingPresetID: UUID?
+    @State private var renameText: String = ""
+
+    @AppStorage("scarlett.autoBackupOnReset")  private var autoBackupOnReset = true
+    @AppStorage("scarlett.autoBackupOnLaunch") private var autoBackupOnLaunch = false
+    @AppStorage("scarlett.autoBackupOnQuit")   private var autoBackupOnQuit = false
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -17,9 +22,6 @@ struct PresetsView: View {
     }()
 
     var body: some View {
-        // Preset save/load both touch the device (push routes + matrix), so
-        // when there's no device the page is gated the same way Mixer and
-        // Routing are.
         ConnectionOverlay(state: state) {
             presetsContent
         }
@@ -34,6 +36,33 @@ struct PresetsView: View {
                     Text("Captures: output routing, matrix sources / gains / mutes / solos, channel names, stereo-link state, and which bus is in view. Existing presets with the same name are overwritten.")
                         .font(.caption).foregroundStyle(Theme.textSecondary)
                 }
+
+                Panel(title: "Automatic backup") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Toggle("", isOn: $autoBackupOnLaunch)
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .labelsHidden()
+                            Text("On launch").font(.caption)
+                        }
+                        HStack(spacing: 8) {
+                            Toggle("", isOn: $autoBackupOnQuit)
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .labelsHidden()
+                            Text("On quit").font(.caption)
+                        }
+                        HStack(spacing: 8) {
+                            Toggle("", isOn: $autoBackupOnReset)
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .labelsHidden()
+                            Text("Before reset").font(.caption)
+                        }
+                    }
+                }
+
                 Panel(title: "Saved presets") {
                     VStack(spacing: 4) {
                         defaultPresetRow
@@ -71,7 +100,7 @@ struct PresetsView: View {
             Button("Cancel", role: .cancel) { confirmDelete = nil }
         }
         .alert(
-            "Couldn’t load preset",
+            "Couldn't load preset",
             isPresented: Binding(
                 get: { loadErrorMessage != nil },
                 set: { if !$0 { loadErrorMessage = nil } }
@@ -87,7 +116,7 @@ struct PresetsView: View {
         HStack(alignment: .firstTextBaseline) {
             Text("Presets").font(.title2).bold().foregroundStyle(Theme.textPrimary)
             Spacer()
-            Text("\(state.presets.count) saved")
+            Text("\(state.presets.count + 1) saved")
                 .font(.caption).foregroundStyle(Theme.textSecondary)
         }
     }
@@ -129,14 +158,69 @@ struct PresetsView: View {
         newPresetName = ""
     }
 
-    private func presetRow(_ preset: ScarlettPreset) -> some View {
+    private func commitRename(_ preset: ScarlettPreset) {
+        let newName = renameText.trimmingCharacters(in: .whitespaces)
+        guard !newName.isEmpty, let idx = state.presets.firstIndex(where: { $0.id == preset.id }) else {
+            renamingPresetID = nil
+            return
+        }
+        var updated = preset
+        updated.name = newName
+        state.presets[idx] = updated
+        state.savePresets()
+        renamingPresetID = nil
+    }
+
+    private func applyDefault() {
+        if autoBackupOnReset {
+            state.userAutoSaveBackup(label: "before reset")
+        }
+        state.userResetRoutingAndMatrix()
+    }
+
+    private var defaultPresetRow: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(preset.name).font(.subheadline.bold()).foregroundStyle(Theme.textPrimary)
-                Text(Self.dateFormatter.string(from: preset.createdAt))
+                Text("Default").font(.subheadline.bold()).foregroundStyle(Theme.textPrimary)
+                Text("Factory defaults for \(state.profile.displayName)")
                     .font(.caption2).foregroundStyle(Theme.textSecondary)
-                Text(state.presetDeviceLabel(preset))
-                    .font(.caption2).foregroundStyle(Theme.textSecondary)
+            }
+            Spacer()
+            Button {
+                applyDefault()
+            } label: {
+                Text("Reset")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Theme.muteActive)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .background(Theme.panelRaised)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    private func presetRow(_ preset: ScarlettPreset) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            if renamingPresetID == preset.id {
+                TextField("Preset name", text: $renameText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 200)
+                    .onSubmit { commitRename(preset) }
+                    .onExitCommand { renamingPresetID = nil }
+                    .onAppear { renameText = preset.name }
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(preset.name).font(.subheadline.bold()).foregroundStyle(Theme.textPrimary)
+                    Text(Self.dateFormatter.string(from: preset.createdAt))
+                        .font(.caption2).foregroundStyle(Theme.textSecondary)
+                    Text(state.presetDeviceLabel(preset))
+                        .font(.caption2).foregroundStyle(Theme.textSecondary)
+                }
             }
             Spacer()
             Button {
@@ -157,6 +241,24 @@ struct PresetsView: View {
             .buttonStyle(.plain)
 
             Button {
+                if renamingPresetID == preset.id {
+                    commitRename(preset)
+                } else {
+                    renameText = preset.name
+                    renamingPresetID = preset.id
+                }
+            } label: {
+                Image(systemName: "pencil")
+                    .font(.system(size: 11))
+                    .frame(width: 24, height: 22)
+                    .background(Theme.panelRaised)
+                    .foregroundStyle(Theme.textSecondary)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+            .buttonStyle(.plain)
+            .help("Rename preset")
+
+            Button {
                 confirmDelete = preset
             } label: {
                 Image(systemName: "trash")
@@ -173,41 +275,5 @@ struct PresetsView: View {
         .padding(10)
         .background(Theme.panelRaised)
         .clipShape(RoundedRectangle(cornerRadius: 5))
-    }
-
-    private var defaultPresetRow: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Default").font(.subheadline.bold()).foregroundStyle(Theme.textPrimary)
-                Text("Factory defaults for \(state.profile.displayName)")
-                    .font(.caption2).foregroundStyle(Theme.textSecondary)
-            }
-            Spacer()
-            Toggle("Backup first", isOn: $autoBackupOnReset)
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-            Button {
-                applyDefault()
-            } label: {
-                Text("Reset")
-                    .font(.system(size: 11, weight: .semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .background(Theme.panelRaised)
-                    .foregroundStyle(Theme.textPrimary)
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(10)
-        .background(Theme.panelRaised)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
-    }
-
-    private func applyDefault() {
-        if autoBackupOnReset {
-            state.userAutoSaveBackup(label: "before reset")
-        }
-        state.userResetRoutingAndMatrix()
     }
 }
