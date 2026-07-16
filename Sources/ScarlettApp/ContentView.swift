@@ -112,8 +112,12 @@ struct ContentView: View {
         HStack {
             if !sidebarCollapsed {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Scarlett 8i6").font(.headline).foregroundStyle(Theme.textPrimary)
-                    Text("1st Gen").font(.caption).foregroundStyle(Theme.textSecondary)
+                    Text(state.device?.profile.modelName ?? "Scarlett MixControl")
+                        .font(.headline)
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("1st Gen")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
                 }
                 Spacer(minLength: 0)
             }
@@ -302,15 +306,30 @@ struct RoutingView: View {
 
                 Panel(title: "Output assignments") {
                     VStack(spacing: 8) {
-                        stereoRouteRow("Monitor",  "Outputs 1+2 (rear jacks)", .monitorLeft, .monitorRight)
-                        stereoRouteRow("Phones",   "Outputs 3+4 (front jack / speakers)", .phonesLeft, .phonesRight)
-                        stereoRouteRow("S/PDIF",   "Digital out (RCA)", .spdifLeft, .spdifRight)
+                        let outputs = state.device?.profile.physicalOutputs ?? DeviceProfile.scarlett8i6.physicalOutputs
+                        let pairs = Dictionary(grouping: outputs, by: { $0.pairLabel })
+                            .values
+                            .map { $0.sorted { $0.isLeft && !$1.isLeft } }
+                            .sorted { $0[0].wValue < $1[0].wValue }
+                            .filter { $0.count == 2 }
+                        ForEach(pairs.indices, id: \.self) { idx in
+                            let pair = pairs[idx]
+                            let left = pair[0], right = pair[1]
+                            stereoRouteRow(
+                                title: left.pairLabel,
+                                subtitle: "Outputs \(left.wValue + 1)+\(right.wValue + 1)",
+                                left: left, right: right
+                            )
+                        }
                     }
                 }
 
                 Panel(title: "USB capture (what your DAW sees)") {
                     VStack(spacing: 8) {
-                        ForEach(0..<3, id: \.self) { pair in
+                        let totalCh = (state.device?.profile.captureChannelCount ?? 6)
+                                       + (state.device?.profile.loopbackChannelCount ?? 0)
+                        let pairs = totalCh / 2
+                        ForEach(0..<pairs, id: \.self) { pair in
                             stereoCaptureRow(
                                 "DAW input \(pair*2 + 1)+\(pair*2 + 2)",
                                 "Capture channels \(pair*2 + 1) (L) and \(pair*2 + 2) (R)",
@@ -320,7 +339,7 @@ struct RoutingView: View {
                     }
                 }
 
-                Text("Tip: routing reads always return 00 00 on the 1st-gen 8i6 — this app remembers your last setup in UserDefaults and re-pushes it to the device on launch.")
+                Text("Tip: routing reads always return 00 00 on the 1st-gen Scarlett — this app remembers your last setup in UserDefaults and re-pushes it to the device on launch.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
             }
             .padding(24)
@@ -332,7 +351,7 @@ struct RoutingView: View {
 
 extension RoutingView {
 
-    fileprivate func stereoRouteRow(_ title: String, _ subtitle: String, _ left: Route, _ right: Route) -> some View {
+    fileprivate func stereoRouteRow(title: String, subtitle: String, left: PhysicalOutput, right: PhysicalOutput) -> some View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.subheadline.bold()).foregroundStyle(Theme.textPrimary)
@@ -340,8 +359,8 @@ extension RoutingView {
             }
             .frame(width: 220, alignment: .leading)
 
-            routePicker(label: "L", route: left)
-            routePicker(label: "R", route: right)
+            routePicker(label: "L", output: left)
+            routePicker(label: "R", output: right)
             Spacer(minLength: 0)
         }
         .padding(10)
@@ -349,15 +368,17 @@ extension RoutingView {
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
-    fileprivate func routePicker(label: String, route: Route) -> some View {
+    @ViewBuilder
+    fileprivate func routePicker(label: String, output: PhysicalOutput) -> some View {
+        let profile = state.device?.profile ?? .scarlett8i6
         HStack(spacing: 6) {
             Text(label).font(.caption.monospacedDigit()).foregroundStyle(Theme.textSecondary).frame(width: 12)
             ThemedMenuPicker(
-                options: MixBus.availableOn8i6,
+                options: profile.sources,
                 displayName: { $0.displayName },
                 selection: Binding(
-                    get: { state.routes[route] ?? .off },
-                    set: { state.userSetRoute(route, to: $0) }
+                    get: { profile.source(forByte: state.routes[Int(output.wValue)] ?? 0xff) },
+                    set: { state.userSetRoute(wValue: Int(output.wValue), sourceByte: $0.byte) }
                 ),
                 width: 150
             )
@@ -380,15 +401,17 @@ extension RoutingView {
         .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 
+    @ViewBuilder
     fileprivate func capturePicker(label: String, channel: Int) -> some View {
+        let profile = state.device?.profile ?? .scarlett8i6
         HStack(spacing: 6) {
             Text(label).font(.caption.monospacedDigit()).foregroundStyle(Theme.textSecondary).frame(width: 12)
             ThemedMenuPicker(
-                options: MixBus.availableOn8i6,
+                options: profile.sources,
                 displayName: { $0.displayName },
                 selection: Binding(
-                    get: { state.captureRoutes[channel] ?? .off },
-                    set: { state.userSetCaptureRoute(channel: channel, to: $0) }
+                    get: { profile.source(forByte: state.captureRoutes[channel] ?? 0xff) },
+                    set: { state.userSetCaptureRoute(channel: channel, sourceByte: $0.byte) }
                 ),
                 width: 150
             )
@@ -425,7 +448,7 @@ struct DeviceView: View {
 
                 Panel(title: "Connection & driver") {
                     InfoGrid(rows: connectionRows)
-                    Text("The 1st-gen Scarlett 8i6 is USB Audio Class 2.0 — no Focusrite kernel driver, no installer. macOS's built-in usbaudiod claims the audio + MIDI interfaces; this app talks to endpoint 0 directly for DSP control transfers, which doesn't conflict.")
+                    Text("All 1st-gen Scarletts are USB Audio Class 2.0 — no Focusrite kernel driver, no installer. macOS's built-in usbaudiod claims the audio + MIDI interfaces; this app talks to endpoint 0 directly for DSP control transfers, which doesn't conflict.")
                         .font(.caption).foregroundStyle(Theme.textSecondary)
                         .padding(.top, 6)
                 }
@@ -521,7 +544,7 @@ struct DeviceView: View {
                         Text("Compatibility")
                             .font(.subheadline.bold())
                             .foregroundStyle(Theme.textPrimary)
-                        Text("Original MixControl supported six 1st-generation Scarlett interfaces. So far only the 8i6 has been ported here — the others share the protocol family but each has its own byte tables to reverse-engineer from the original binary.")
+                        Text("Original MixControl supported six 1st-generation Scarlett interfaces. The 8i6 is fully supported (primary target) and the 18i8 has experimental support; the others share the protocol family but each has its own byte tables from the original binary.")
                             .font(.caption)
                             .foregroundStyle(Theme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -530,6 +553,9 @@ struct DeviceView: View {
                             compatRow(symbol: "checkmark.circle.fill",
                                       color: .green,
                                       text: "Scarlett 8i6 — tested, primary target")
+                            compatRow(symbol: "checkmark.circle.fill",
+                                      color: .green,
+                                      text: "Scarlett 18i8 — experimental support")
                             compatRow(symbol: "questionmark.circle",
                                       color: .orange,
                                       text: "Scarlett 6i6 — supported by original MixControl, not yet ported")
@@ -539,9 +565,6 @@ struct DeviceView: View {
                             compatRow(symbol: "questionmark.circle",
                                       color: .orange,
                                       text: "Scarlett 18i6 — supported by original MixControl, not yet ported")
-                            compatRow(symbol: "questionmark.circle",
-                                      color: .orange,
-                                      text: "Scarlett 18i8 — supported by original MixControl, not yet ported")
                             compatRow(symbol: "questionmark.circle",
                                       color: .orange,
                                       text: "Scarlett 18i20 — supported by original MixControl, not yet ported")
@@ -687,7 +710,7 @@ struct ConnectionOverlayCard: View {
             return (
                 .orange,
                 "antenna.radiowaves.left.and.right.slash",
-                "Waiting for Scarlett 8i6",
+                "Waiting for Scarlett",
                 "Plug the device in via USB. The app will reconnect automatically."
             )
         case .disconnected(let reason):
@@ -702,7 +725,7 @@ struct ConnectionOverlayCard: View {
                 .yellow,
                 "exclamationmark.triangle.fill",
                 "\(p.displayName) detected — not yet supported",
-                "This Community Edition currently only supports the Scarlett 8i6 (1st gen). We've detected your \(p.displayName) on the bus but can't drive its mixer yet — the byte mappings differ between models.\n\nSupport for other 1st-gen Scarletts is on the roadmap. If you'd like to help, the project is open source and the byte tables can be extracted from the original MixControl binary the same way the 8i6 was — see the project README."
+                "This Community Edition supports the Scarlett 8i6 and 18i8 (1st gen). We've detected your \(p.displayName) on the bus but can't drive its mixer yet — the byte mappings differ between models.\n\nSupport for other 1st-gen Scarletts is on the roadmap. If you'd like to help, the project is open source and the byte tables can be extracted from the original MixControl binary the same way the 8i6 was — see the project README."
             )
         }
     }
@@ -728,10 +751,10 @@ struct FirstLaunchCard: View {
                     .font(.title3)            // regular weight — visual contrast with the bold title above
                     .foregroundStyle(Theme.textPrimary)
             }
-            Text("For the Scarlett 8i6 (1st gen)")
+            Text("For the \(state.device?.profile.displayName ?? "Scarlett 8i6") (1st gen)")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
-            Text("Your Scarlett 8i6 keeps its routing and mixer state in flash. Keep what's already on the device, or start from a clean default config?")
+            Text("Your \(state.device?.profile.displayName ?? "Scarlett") keeps its routing and mixer state in flash. Keep what's already on the device, or start from a clean default config?")
                 .font(.callout)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)

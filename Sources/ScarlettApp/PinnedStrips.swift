@@ -49,7 +49,7 @@ struct PinnedDawStrip: View {
     }
 
     private var fader: some View {
-        let pair = MixerState.pairIndex(of: state.selectedBus)
+        let pair = state.selectedBusIndex / 2
         let level = state.mixerLevels[leftCh][pair]
         let isMuted = state.mixerMutes[leftCh]
 
@@ -66,12 +66,12 @@ struct PinnedDawStrip: View {
             }
 
             VStack(spacing: 1) {
-                StripMeter(state: state, source: .daw1, height: 220)
+                StripMeter(state: state, sourceByte: 0x00, height: StripLayout.faderHeight)
                 Text("L").font(.system(size: 8, design: .monospaced))
                     .foregroundStyle(Theme.textSecondary)
             }
             VStack(spacing: 1) {
-                StripMeter(state: state, source: .daw2, height: 220)
+                StripMeter(state: state, sourceByte: 0x01, height: StripLayout.faderHeight)
                 Text("R").font(.system(size: 8, design: .monospaced))
                     .foregroundStyle(Theme.textSecondary)
             }
@@ -88,10 +88,11 @@ struct PinnedDawStrip: View {
     }
 
     private var peakReadout: some View {
-        let peakL = StripMeter.level(from: state.peaksHeld, source: .daw1)
-        let peakR = StripMeter.level(from: state.peaksHeld, source: .daw2)
-        let maxL  = StripMeter.level(from: state.peaksMax,  source: .daw1)
-        let maxR  = StripMeter.level(from: state.peaksMax,  source: .daw2)
+        let profile = state.device?.profile ?? .scarlett8i6
+        let peakL = StripMeter.level(from: state.peaksHeld, byte: 0x00, profile: profile)
+        let peakR = StripMeter.level(from: state.peaksHeld, byte: 0x01, profile: profile)
+        let maxL  = StripMeter.level(from: state.peaksMax,  byte: 0x00, profile: profile)
+        let maxR  = StripMeter.level(from: state.peaksMax,  byte: 0x01, profile: profile)
         let peak = max(peakL, peakR)
         let max_ = max(maxL, maxR)
         return VStack(spacing: 1) {
@@ -99,8 +100,8 @@ struct PinnedDawStrip: View {
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(Theme.textSecondary)
             Button {
-                state.clearMaxPeak(forSource: .daw1)
-                state.clearMaxPeak(forSource: .daw2)
+                state.clearMaxPeak(forByte: 0x00)
+                state.clearMaxPeak(forByte: 0x01)
             } label: {
                 Text(formatPeak("Mx", max_))
                     .font(.system(size: 9, design: .monospaced))
@@ -156,8 +157,8 @@ struct PinnedMasterStrip: View {
                     get: { state.monitorAtten },
                     set: { state.userSetMonitorAtten($0) }
                 ),
-                leftRoute: .monitorLeft,
-                rightRoute: .monitorRight,
+                leftWValue: 0,
+                rightWValue: 1,
                 leftMuted: state.monitorLMuted,
                 rightMuted: state.monitorRMuted,
                 toggleLeft: {
@@ -179,8 +180,8 @@ struct PinnedMasterStrip: View {
                     get: { state.phonesAtten },
                     set: { state.userSetPhonesAtten($0) }
                 ),
-                leftRoute: .phonesLeft,
-                rightRoute: .phonesRight,
+                leftWValue: 2,
+                rightWValue: 3,
                 leftMuted: state.phonesLMuted,
                 rightMuted: state.phonesRMuted,
                 toggleLeft: {
@@ -208,10 +209,10 @@ struct OutputStrip: View {
     let title: String
     let subtitle: String
     @Binding var atten: Double
-    /// The Route enum cases for this strip's L and R outputs.  Used to
-    /// look up the current source via `state.routes[leftRoute]`.
-    let leftRoute: Route
-    let rightRoute: Route
+    /// The wValue for this strip's L and R outputs.  Used to
+    /// look up the current source via `state.routes[leftWValue]`.
+    let leftWValue: Int
+    let rightWValue: Int
     let leftMuted: Bool
     let rightMuted: Bool
     let toggleLeft: () -> Void
@@ -220,10 +221,10 @@ struct OutputStrip: View {
     let dimActive: Bool
     let toggleDim: () -> Void
 
-    /// Source feeding the L/R output right now (per the router).
-    /// Defaults to .off when no route has been set yet.
-    private var leftSource:  MixBus { state.routes[leftRoute]  ?? .off }
-    private var rightSource: MixBus { state.routes[rightRoute] ?? .off }
+    /// Source byte feeding the L/R output right now (per the router).
+    /// Defaults to 0xff (Off) when no route has been set yet.
+    private var leftSourceByte:  UInt8 { state.routes[leftWValue]  ?? 0xff }
+    private var rightSourceByte: UInt8 { state.routes[rightWValue] ?? 0xff }
 
     var body: some View {
         VStack(spacing: StripLayout.vSpacing) {
@@ -264,8 +265,8 @@ struct OutputStrip: View {
             VerticalFader(db: $atten, dbRange: -60...0)
                 .contextMenu { Button("Reset to 0 dB") { atten = 0 } }
 
-            RoutedMeter(state: state, source: leftSource)
-            RoutedMeter(state: state, source: rightSource)
+            RoutedMeter(state: state, sourceByte: leftSourceByte)
+            RoutedMeter(state: state, sourceByte: rightSourceByte)
 
             DbScale(
                 dbRange: -60...0,
@@ -283,10 +284,11 @@ struct OutputStrip: View {
 
     /// Pk / Mx based on the louder of the two currently-routed sources.
     private var peakReadout: some View {
-        let peakL = RoutedMeter.level(from: state.peaksHeld, source: leftSource)
-        let peakR = RoutedMeter.level(from: state.peaksHeld, source: rightSource)
-        let maxL  = RoutedMeter.level(from: state.peaksMax,  source: leftSource)
-        let maxR  = RoutedMeter.level(from: state.peaksMax,  source: rightSource)
+        let profile = state.device?.profile ?? .scarlett8i6
+        let peakL = RoutedMeter.level(from: state.peaksHeld, byte: leftSourceByte, profile: profile)
+        let peakR = RoutedMeter.level(from: state.peaksHeld, byte: rightSourceByte, profile: profile)
+        let maxL  = RoutedMeter.level(from: state.peaksMax,  byte: leftSourceByte, profile: profile)
+        let maxR  = RoutedMeter.level(from: state.peaksMax,  byte: rightSourceByte, profile: profile)
         let peak = max(peakL, peakR)
         let max_ = max(maxL, maxR)
         return VStack(spacing: 1) {
@@ -294,8 +296,8 @@ struct OutputStrip: View {
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(Theme.textSecondary)
             Button {
-                state.clearMaxPeak(leftSource)
-                state.clearMaxPeak(rightSource)
+                state.clearMaxPeak(forByte: leftSourceByte)
+                state.clearMaxPeak(forByte: rightSourceByte)
             } label: {
                 Text(formatPeak("Mx", max_))
                     .font(.system(size: 9, design: .monospaced))
@@ -338,17 +340,18 @@ struct OutputStrip: View {
 /// little widget, not the whole output strip.
 struct RoutedMeter: View {
     @Bindable var state: MixerState
-    let source: MixBus
-    var height: CGFloat = 220
+    let sourceByte: UInt8
+    var height: CGFloat = StripLayout.faderHeight
 
     var body: some View {
-        let live = Self.level(from: state.peaks,    source: source)
-        let held = Self.level(from: state.peaksHeld, source: source)
-        let max_ = Self.level(from: state.peaksMax,  source: source)
+        let profile = state.device?.profile ?? .scarlett8i6
+        let live = Self.level(from: state.peaks,    byte: sourceByte, profile: profile)
+        let held = Self.level(from: state.peaksHeld, byte: sourceByte, profile: profile)
+        let max_ = Self.level(from: state.peaksMax,  byte: sourceByte, profile: profile)
         VerticalMeter(db: live, peakDb: held, maxPeakDb: max_, height: height)
     }
 
-    static func level(from reading: PeakReading, source: MixBus) -> Double {
-        reading.level(for: source)
+    static func level(from reading: PeakReading, byte: UInt8, profile: DeviceProfile) -> Double {
+        reading.level(forByte: byte, profile: profile)
     }
 }

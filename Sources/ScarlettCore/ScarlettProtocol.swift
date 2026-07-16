@@ -496,6 +496,144 @@ extension ScarlettDevice {
             mixer:  decodePeaks(mix, count: 8)
         )
     }
+
+    // MARK: - Profile-driven raw-byte commands
+    //
+    // Phase 1 of the multi-device refactor: every per-device byte / wIndex /
+    // wValue previously baked into the `SignalSource` / `MixBus` / `Route` /
+    // `SignalOut` enums now lives in `DeviceProfile`.  These methods take
+    // raw bytes and bus indices directly; call sites resolve them through
+    // `self.profile` (the active `DeviceProfile`).
+    //
+    // These are *additive* overloads — the 8i6-enum methods above remain so
+    // the existing `MixerState` / views still build.  Phase 2 will migrate
+    // those call sites to these raw-byte methods and remove the enums.
+    //
+    // Channel / bus / capture bounds are enforced against `profile`
+    // rather than baked into `0...17` / `m1..m6` / `0...7`.  `0xff`
+    // remains the "Off" *write* byte — but on the 18i8 the device reads
+    // back `0x22` after a `0xff` write (sentinel for "disconnected channel"),
+    // so callers must never compare a GET result to `0xff` to detect Off.
+    // Use `DeviceProfile.source(forByte:)` which falls back to "Off (0xXX)"
+    // for any byte not in `sources`.
+
+    /// Matrix-mixer source picker (`wIndex=0x3200`).
+    /// `channel` is 0..<profile.matrixInputCount.  `sourceByte` is one of
+    /// `profile.sources.map(\.byte)` (or `0xff` to disconnect).
+    public func setMixerSourceByte(channel: Int, sourceByte: UInt8) throws {
+        guard (0..<profile.matrixInputCount).contains(channel) else {
+            throw ScarlettError.invalidArgument("mixer channel must be 0..<\(profile.matrixInputCount)")
+        }
+        try controlOut(
+            cmd: 0x01,
+            value: 0x0600 + UInt16(channel),
+            index: 0x3200,
+            data: [sourceByte, 0x00]
+        )
+    }
+
+    public func getMixerSourceByte(channel: Int) throws -> UInt8 {
+        guard (0..<profile.matrixInputCount).contains(channel) else {
+            throw ScarlettError.invalidArgument("mixer channel must be 0..<\(profile.matrixInputCount)")
+        }
+        let r = try controlIn(cmd: 0x01, value: 0x0600 + UInt16(channel), index: 0x3200, length: 2)
+        return r[0]
+    }
+
+    /// Matrix-mixer per-cell gain (`wIndex=0x3c00`, `mtx=(channel<<3)|(bus&7)`).
+    /// `channel` is 0..<profile.matrixInputCount, `busIndex` is 0..<profile.mixBusCount.
+    /// The wire format masks the bus index to 3 bits, so `mixBusCount` is
+    /// limited to ≤ 8 regardless of device — see `18i8.md` (Phase 0 verdict).
+    public func setMixerGainRaw(channel: Int, busIndex: Int, db: Double) throws {
+        guard (0..<profile.matrixInputCount).contains(channel) else {
+            throw ScarlettError.invalidArgument("mixer channel must be 0..<\(profile.matrixInputCount)")
+        }
+        guard (0..<profile.mixBusCount).contains(busIndex) else {
+            throw ScarlettError.invalidArgument("mixer bus index must be 0..<\(profile.mixBusCount)")
+        }
+        let mtx = UInt16(channel << 3) + UInt16(busIndex & 0x07)
+        try controlOut(
+            cmd: 0x01,
+            value: 0x0100 + mtx,
+            index: 0x3c00,
+            data: gainBytes(db: db)
+        )
+    }
+
+    public func getMixerGainRaw(channel: Int, busIndex: Int) throws -> Double {
+        guard (0..<profile.matrixInputCount).contains(channel) else {
+            throw ScarlettError.invalidArgument("mixer channel must be 0..<\(profile.matrixInputCount)")
+        }
+        guard (0..<profile.mixBusCount).contains(busIndex) else {
+            throw ScarlettError.invalidArgument("mixer bus index must be 0..<\(profile.mixBusCount)")
+        }
+        let mtx = UInt16(channel << 3) + UInt16(busIndex & 0x07)
+        let r = try controlIn(cmd: 0x01, value: 0x0100 + mtx, index: 0x3c00, length: 2)
+        return Double(Int8(bitPattern: r[1]))
+    }
+
+    /// Physical-output source picker (`wIndex=0x3300`).
+    /// `output.wValue` comes from `profile.physicalOutputs`.
+    public func setPhysicalRouteSource(_ output: PhysicalOutput, sourceByte: UInt8) throws {
+        try controlOut(
+            cmd: 0x01,
+            value: output.wValue,
+            index: 0x3300,
+            data: [sourceByte, 0x00]
+        )
+    }
+
+    public func getPhysicalRouteSource(_ output: PhysicalOutput) throws -> UInt8 {
+        let r = try controlIn(cmd: 0x01, value: output.wValue, index: 0x3300, length: 2)
+        return r[0]
+    }
+
+    /// USB-capture (ToHost / DAW-input) source picker (`wIndex=0x3400`).
+    /// `channel` is 0..<profile.captureChannelCount + profile.loopbackChannelCount.
+    public func setCaptureRouteSource(channel: Int, sourceByte: UInt8) throws {
+        let upper = profile.captureChannelCount + profile.loopbackChannelCount
+        guard (0..<upper).contains(channel) else {
+            throw ScarlettError.invalidArgument("capture channel must be 0..<\(upper)")
+        }
+        try controlOut(
+            cmd: 0x01,
+            value: UInt16(channel),
+            index: 0x3400,
+            data: [sourceByte, 0x00]
+        )
+    }
+
+    public func getCaptureRouteSource(channel: Int) throws -> UInt8 {
+        let upper = profile.captureChannelCount + profile.loopbackChannelCount
+        guard (0..<upper).contains(channel) else {
+            throw ScarlettError.invalidArgument("capture channel must be 0..<\(upper)")
+        }
+        let r = try controlIn(cmd: 0x01, value: UInt16(channel), index: 0x3400, length: 2)
+        return r[0]
+    }
+
+    /// Post-DAC output mute/unmute for a physical output (by its wValue).
+    /// The wValue matches `PhysicalOutput.wValue` from the active profile.
+    /// Use this instead of `setMute(_:muted:)` which is tied to 8i6's
+    /// `SignalOut` enum mapping.
+    public func setMuteRaw(outputWValue: UInt16, muted: Bool) throws {
+        try controlOut(
+            cmd: 0x01,
+            value: 0x0100 + outputWValue + 1,
+            index: 0x0a00,
+            data: muted ? muteBytes : unmuteBytes
+        )
+    }
+
+    /// Post-DAC output attenuation for a physical output (by its wValue).
+    public func setAttenuationRaw(outputWValue: UInt16, db: Double) throws {
+        try controlOut(
+            cmd: 0x01,
+            value: 0x0200 + outputWValue + 1,
+            index: 0x0a00,
+            data: attenuationBytes(db: db)
+        )
+    }
 }
 
 func val16ToDb(_ v: UInt16) -> Double {

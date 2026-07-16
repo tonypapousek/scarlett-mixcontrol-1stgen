@@ -4,6 +4,9 @@ Package.resolved
 *.xcodeproj
 .DS_Store
 
+reference/
+
 # Output of scripts/make-app.sh — the assembled .app bundle.  Rebuild
 # locally with the script; don't track binaries in git.
 build/
+

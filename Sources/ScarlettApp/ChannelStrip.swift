@@ -30,7 +30,7 @@ struct ChannelStrip: View {
                 .frame(height: StripLayout.controlsHeight)
         }
         .frame(width: StripLayout.width)
-        .padding(.vertical, 10)
+        .padding(.vertical, 6)
         .padding(.horizontal, 6)
         .background(Theme.panel)
         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -49,53 +49,61 @@ struct ChannelStrip: View {
     // the same vertical space (an empty placeholder) to keep strip heights
     // consistent across the row.
 
-    @ViewBuilder
-    private func inputSwitch(source: SignalSource) -> some View {
-        switch source {
-        case .analog1:
-            ImpedanceSwitch(value: Binding(
-                get: { state.impedance1 },
-                set: { state.userSetImpedance(channel: 1, mode: $0) }
-            ))
-        case .analog2:
-            ImpedanceSwitch(value: Binding(
-                get: { state.impedance2 },
-                set: { state.userSetImpedance(channel: 2, mode: $0) }
-            ))
-        case .analog3:
-            HiLoSwitch(value: Binding(
-                get: { state.hi3 },
-                set: { state.userSetHiLo(channel: 3, hi: $0) }
-            ))
-        case .analog4:
-            HiLoSwitch(value: Binding(
-                get: { state.hi4 },
-                set: { state.userSetHiLo(channel: 4, hi: $0) }
-            ))
-        default:
-            // Reserve the same vertical footprint so every strip aligns.
-            Color.clear.frame(height: 22)
+    private func inputSwitch(source byte: UInt8) -> some View {
+        let profile = state.device?.profile ?? .scarlett8i6
+        let analogSources = profile.sources.filter { $0.category == .analog }
+        guard let analogIdx = analogSources.firstIndex(where: { $0.byte == byte }) else {
+            return AnyView(Color.clear.frame(height: StripLayout.switchRowHeight))
         }
+        let hwChannel = analogIdx + 1
+        if profile.impedanceChannels.contains(hwChannel) {
+            return AnyView(ImpedanceSwitch(value: Binding(
+                get: { hwChannel == 1 ? state.impedance1 : state.impedance2 },
+                set: { state.userSetImpedance(channel: hwChannel, mode: $0) }
+            )))
+        }
+        if profile.hiLoChannels.contains(hwChannel) {
+            return AnyView(HiLoSwitch(value: Binding(
+                get: { hwChannel == 3 ? state.hi3 : state.hi4 },
+                set: { state.userSetHiLo(channel: hwChannel, hi: $0) }
+            )))
+        }
+        return AnyView(Color.clear.frame(height: StripLayout.switchRowHeight))
     }
 
     // MARK: - Header
 
-    private func header(source: SignalSource) -> some View {
+    @ViewBuilder
+    private func header(source byte: UInt8) -> some View {
+        let profile = state.device?.profile ?? .scarlett8i6
+        let options = profile.matrixChannelSources
+        let current = options.first(where: { $0.byte == byte })
+            ?? profile.source(forByte: byte)
         VStack(spacing: 3) {
             nameField
             ThemedMenuPicker(
-                options: SignalSource.availableOn8i6,
+                options: options,
                 displayName: { $0.displayName },
                 selection: Binding(
-                    get: { state.mixerSources[channel] },
-                    set: { state.userSetMixerSource(channel: channel, source: $0) }
+                    get: { current },
+                    set: { state.userSetMixerSource(channel: channel, sourceByte: $0.byte) }
                 )
             )
-
             Rectangle()
-                .fill(source.accentColor)
+                .fill(accentColor(forByte: byte, from: profile))
                 .frame(height: 2)
                 .padding(.horizontal, 2)
+        }
+    }
+
+    private func accentColor(forByte byte: UInt8, from profile: DeviceProfile) -> Color {
+        guard let sd = profile.sources.first(where: { $0.byte == byte }) else {
+            return Theme.accentOther
+        }
+        switch sd.category {
+        case .analog, .digital: return Theme.accentAnalog
+        case .daw:              return Theme.accentPlayback
+        case .mixOutput, .off:  return Theme.accentOther
         }
     }
 
@@ -143,7 +151,7 @@ struct ChannelStrip: View {
     // MARK: - Fader column
 
     private var fader: some View {
-        let pair = MixerState.pairIndex(of: state.selectedBus)
+        let pair = state.selectedBusIndex / 2
         let level = state.mixerLevels[channel][pair]
         let source = state.mixerSources[channel]
 
@@ -162,11 +170,11 @@ struct ChannelStrip: View {
             // Reads peaks/peaksHeld/peaksMax internally → isolated from the
             // outer strip body so 20 Hz meter updates only re-render this
             // small view, not the whole strip (faders, pickers, buttons, …).
-            StripMeter(state: state, source: source)
+            StripMeter(state: state, sourceByte: source)
 
             DbScale()
         }
-        .frame(height: 220)
+        .frame(height: StripLayout.faderHeight)
         .overlay(alignment: .topTrailing) {
             Text(formatDb(level))
                 .font(.system(size: 9, design: .monospaced))
@@ -176,7 +184,7 @@ struct ChannelStrip: View {
     }
 
     private var panSlider: some View {
-        let pair = MixerState.pairIndex(of: state.selectedBus)
+        let pair = state.selectedBusIndex / 2
         let pan = state.mixerPans[channel][pair]
         return VStack(spacing: 1) {
             Slider(
@@ -206,7 +214,7 @@ struct ChannelStrip: View {
 
     private var peakReadout: some View {
         let source = state.mixerSources[channel]
-        return StripPeakReadout(state: state, source: source)
+        return StripPeakReadout(state: state, sourceByte: source)
     }
 
     // MARK: - Mute / Solo
@@ -271,54 +279,33 @@ struct HiLoSwitch: View {
 /// strip's fader / pickers / buttons / name field.
 struct StripMeter: View {
     @Bindable var state: MixerState
-    let source: SignalSource
-    var height: CGFloat = 220
+    let sourceByte: UInt8
+    var height: CGFloat = StripLayout.faderHeight
 
     var body: some View {
-        let live = level(from: state.peaks)
-        let held = level(from: state.peaksHeld)
-        let max_ = level(from: state.peaksMax)
+        let profile = state.device?.profile ?? .scarlett8i6
+        let live = level(from: state.peaks, profile: profile)
+        let held = level(from: state.peaksHeld, profile: profile)
+        let max_ = level(from: state.peaksMax, profile: profile)
         VerticalMeter(db: live, peakDb: held, maxPeakDb: max_, height: height)
     }
 
-    private func level(from peaks: PeakReading) -> Double {
-        Self.level(from: peaks, source: source)
+    private func level(from peaks: PeakReading, profile: DeviceProfile) -> Double {
+        peaks.level(forByte: sourceByte, profile: profile)
     }
 
-    static func level(from peaks: PeakReading, source: SignalSource) -> Double {
-        // Defer to PeakReading.level(for: MixBus) — every SignalSource case has
-        // the same raw byte value as the corresponding MixBus case, so a
-        // raw-value cross-conversion is exact.
-        peaks.level(for: MixBus(rawValue: source.rawValue) ?? .off)
+    static func level(from peaks: PeakReading, byte: UInt8, profile: DeviceProfile) -> Double {
+        peaks.level(forByte: byte, profile: profile)
     }
 }
 
 extension PeakReading {
-    /// Look up the meter value for whichever device-side meter slot
-    /// corresponds to a given signal source.  Returns -∞ for `.off` or
-    /// for sources the device doesn't surface a meter for.
-    func level(for source: MixBus) -> Double {
-        switch source {
-        case .off, .daw7, .daw8, .daw9, .daw10, .daw11, .daw12:
-            return -.infinity
-        case .daw1:    return daw[0]
-        case .daw2:    return daw[1]
-        case .daw3:    return daw[2]
-        case .daw4:    return daw[3]
-        case .daw5:    return daw[4]
-        case .daw6:    return daw[5]
-        case .analog1: return inputs[0]
-        case .analog2: return inputs[1]
-        case .analog3: return inputs[2]
-        case .analog4: return inputs[3]
-        case .spdif1:  return inputs[8]
-        case .spdif2:  return inputs[9]
-        case .m1:      return mixer[0]
-        case .m2:      return mixer[1]
-        case .m3:      return mixer[2]
-        case .m4:      return mixer[3]
-        case .m5:      return mixer[4]
-        case .m6:      return mixer[5]
+    func level(forByte byte: UInt8, profile: DeviceProfile) -> Double {
+        guard let slot = profile.peakSlot(forByte: byte) else { return -.infinity }
+        switch slot {
+        case .input(let i):  return inputs.indices.contains(i) ? inputs[i] : -.infinity
+        case .daw(let i):    return daw.indices.contains(i) ? daw[i] : -.infinity
+        case .mixer(let i):  return mixer.indices.contains(i) ? mixer[i] : -.infinity
         }
     }
 }
@@ -327,17 +314,18 @@ extension PeakReading {
 /// as `StripMeter` — only this view re-renders when the peak values change.
 struct StripPeakReadout: View {
     @Bindable var state: MixerState
-    let source: SignalSource
+    let sourceByte: UInt8
 
     var body: some View {
-        let peak = StripMeter.level(from: state.peaksHeld, source: source)
-        let max_ = StripMeter.level(from: state.peaksMax, source: source)
+        let profile = state.device?.profile ?? .scarlett8i6
+        let peak = StripMeter.level(from: state.peaksHeld, byte: sourceByte, profile: profile)
+        let max_ = StripMeter.level(from: state.peaksMax, byte: sourceByte, profile: profile)
         VStack(spacing: 1) {
             Text(formatPeak("Pk", peak))
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(Theme.textSecondary)
             Button {
-                state.clearMaxPeak(forSource: source)
+                state.clearMaxPeak(forByte: sourceByte)
             } label: {
                 Text(formatPeak("Mx", max_))
                     .font(.system(size: 9, design: .monospaced))

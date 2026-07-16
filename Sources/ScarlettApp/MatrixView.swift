@@ -3,13 +3,18 @@ import ScarlettCore
 
 /// The matrix mixer view — Control 2 style.
 ///
-/// Top bar: bus tabs (Mix M1..M6).
-/// Below: horizontally scrolling row of `ChannelStrip`s, one per matrix
-/// channel that we expose to the user (first 14 of the 18 protocol slots —
-/// the rest aren't useful on the 8i6).
+/// Top bar: bus tabs (number from active DeviceProfile).
+/// Below: two rows of horizontally scrolling `ChannelStrip`s.
 struct MatrixMixerView: View {
     @Bindable var state: MixerState
-    private let visibleChannels = 0..<14
+
+    private var visibleChannels: Range<Int> {
+        0..<(state.device?.profile.matrixInputCount ?? 18)
+    }
+
+    private var busCount: Int {
+        state.device?.profile.mixBusCount ?? 6
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -31,13 +36,14 @@ struct MatrixMixerView: View {
     }
 
     private var busTabs: some View {
-        HStack(spacing: 4) {
-            ForEach(MixBus.matrixOutputs) { bus in
-                let selected = state.selectedBus == bus
+        let busCount = busCount
+        return HStack(spacing: 4) {
+            ForEach(0..<busCount, id: \.self) { idx in
+                let selected = state.selectedBusIndex == idx
                 Button {
-                    state.selectedBus = bus
+                    state.selectedBusIndex = idx
                 } label: {
-                    Text(bus.displayName)
+                    Text("M\(idx + 1)")
                         .font(.system(size: 12, weight: .semibold))
                         .frame(width: 60, height: 28)
                         .background(selected ? Theme.muteActive : Theme.panelRaised)
@@ -45,7 +51,7 @@ struct MatrixMixerView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
                 .buttonStyle(.plain)
-                .contextMenu { copyMixMenuItems(targetBus: bus) }
+                .contextMenu { copyMixMenuItems(targetBusIndex: idx) }
             }
             Spacer()
             actionButton(icon: "arrow.counterclockwise", label: "Clear peaks") {
@@ -71,13 +77,12 @@ struct MatrixMixerView: View {
         }
     }
 
-    /// Context-menu items for a bus tab — copy this pair's settings to one
-    /// of the other two pairs.  Right-click any bus tab to access.
     @ViewBuilder
-    private func copyMixMenuItems(targetBus: MixBus) -> some View {
-        let sourcePair = targetBus.stereoPairIndex ?? 0
+    private func copyMixMenuItems(targetBusIndex: Int) -> some View {
+        let sourcePair = targetBusIndex / 2
+        let busPairs = (busCount + 1) / 2
         let pairLabel: (Int) -> String = { p in "M\(p*2 + 1)+M\(p*2 + 2)" }
-        ForEach(0..<3, id: \.self) { dest in
+        ForEach(0..<busPairs, id: \.self) { dest in
             if dest != sourcePair {
                 Button("Copy \(pairLabel(sourcePair)) → \(pairLabel(dest))") {
                     state.userCopyMixPair(from: sourcePair, to: dest)
@@ -108,14 +113,29 @@ struct MatrixMixerView: View {
     }
 
     private var strips: some View {
-        HStack(alignment: .top, spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(visibleChannels, id: \.self) { ch in
-                        ChannelStrip(channel: ch, state: state)
+        let ch = visibleChannels
+        let count = ch.count
+        let mid = count / 2
+        let topHalf = ch.lowerBound..<ch.lowerBound + mid
+        let botHalf = ch.lowerBound + mid..<ch.upperBound
+        return HStack(alignment: .top, spacing: 6) {
+            VStack(spacing: StripLayout.vSpacing) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(topHalf, id: \.self) { ch in
+                            ChannelStrip(channel: ch, state: state)
+                        }
                     }
+                    .padding(.vertical, StripLayout.rowPaddingV)
                 }
-                .padding(.vertical, 4)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(botHalf, id: \.self) { ch in
+                            ChannelStrip(channel: ch, state: state)
+                        }
+                    }
+                    .padding(.vertical, StripLayout.rowPaddingV)
+                }
             }
             PinnedDawStrip(state: state)
             PinnedMasterStrip(state: state)

@@ -45,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Approximate Apple's standard Dock icon look:
+        /// Approximate Apple's standard Dock icon look:
     ///  - inset the source artwork ~10% so the rendered icon matches the
     ///    visual size of stock macOS apps
     ///  - clip the whole canvas with a rounded rectangle (~22% corner
@@ -86,6 +86,11 @@ struct ScarlettApp: App {
                     idealHeight: 720,
                     maxHeight: .infinity
                 )
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    if UserDefaults.standard.bool(forKey: "scarlett.autoBackupOnQuit") {
+                        state.userAutoSaveBackup(label: "at shutdown")
+                    }
+                }
         }
         .windowResizability(.contentSize)
         .commands {
@@ -115,7 +120,7 @@ private func exportSnapshot(state: MixerState) {
     // mangles our `.8i6` extension into "ScarlettSnapshot.8i6.json".
     panel.allowsOtherFileTypes = true
     panel.nameFieldStringValue = "ScarlettSnapshot.8i6"
-    panel.title = "Save Scarlett 8i6 snapshot"
+    panel.title = "Save Scarlett snapshot"
     if panel.runModal() == .OK, let url = panel.url {
         do { try state.userExportSnapshot(to: url) }
         catch {
@@ -130,7 +135,7 @@ private func importSnapshot(state: MixerState) {
     // No content-type filter — the user might have a `.8i6` file or a
     // `.json` file (both are valid, contents are checked at decode time).
     panel.allowsMultipleSelection = false
-    panel.title = "Open Scarlett 8i6 snapshot"
+    panel.title = "Open Scarlett snapshot"
     if panel.runModal() == .OK, let url = panel.url {
         do { try state.userImportSnapshot(from: url) }
         catch {

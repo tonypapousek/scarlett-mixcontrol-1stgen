@@ -104,12 +104,12 @@ For dev iteration without packaging: `swift run scarlett-app`. There's also a `s
 | Scarlett 6i6 _(1st gen)_     | 🟡 &nbsp; Detected, support pending                  |
 | Scarlett 16i8 _(1st gen)_    | 🟡 &nbsp; Detected, support pending                  |
 | Scarlett 18i6 _(1st gen)_    | 🟡 &nbsp; Detected, support pending                  |
-| Scarlett 18i8 _(1st gen)_    | 🟡 &nbsp; Detected, support pending                  |
+| Scarlett 18i8 _(1st gen)_    | 🧪 &nbsp; Experimental                               |
 | Scarlett 18i20 _(1st gen)_   | 🟡 &nbsp; Detected, support pending                  |
 | Scarlett 2nd / 3rd / 4th gen | ❌ &nbsp; Different protocol — won't work            |
 | Saffire (FireWire) family    | ❌ &nbsp; Different transport — won't work           |
 
-> 🟡 The app will _recognise_ other 1st-gen Scarletts on the bus and show a friendly "not yet supported" screen — it won't try to drive them with the wrong byte tables.
+> 🧪 18i8 has _experimental_ support — the matrix mixer, routing, and most DSP controls work, but hasn't been battle-tested the way 8i6 has. Other 1st-gen Scarletts (6i6, 16i8, 18i6, 18i20) still show a friendly "not yet supported" screen.
 
 <br/>
 

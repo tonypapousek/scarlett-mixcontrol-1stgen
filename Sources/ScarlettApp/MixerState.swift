@@ -5,14 +5,14 @@ import CoreAudio
 import IOKit
 import ScarlettCore
 
-/// High-level connection state of the Scarlett 8i6.  Tracked separately from
+/// High-level connection state of the Scarlett device.  Tracked separately from
 /// the device handle so the UI can render meaningful "waiting" / "disconnected"
 /// states distinct from "open but erroring on a single transfer".
 public enum ConnectionState: Equatable {
     case waiting                          // App is up, nothing plugged in yet
     case connected                        // Device handle opened and last poll succeeded
     case disconnected(String)             // Was connected, lost — reason for display
-    case unsupported(DeviceProfile)       // Found a Focusrite, but it's not the 8i6 we officially support
+    case unsupported(DeviceProfile)       // Found a Focusrite with no DeviceProfile match at all
 }
 
 // View model holding the live device handle, the latest peak meter reading,
@@ -81,11 +81,9 @@ final class MixerState {
     var hi4: Bool = false
 
     // Routing — default "Off" displayed, not pushed on launch.
-    var routes: [Route: MixBus] = [
-        .monitorLeft: .off, .monitorRight: .off,
-        .phonesLeft:  .off, .phonesRight:  .off,
-        .spdifLeft:   .off, .spdifRight:   .off,
-    ]
+    // Key is physical-output wValue (0..<profile.physicalOutputs.count);
+    // value is the source byte from profile.sources (0xff = write Off).
+    var routes: [Int: UInt8] = [:]
 
     // Device config — default values shown, not pushed on launch.
     var clock: ClockSource = .internalClock
@@ -108,25 +106,24 @@ final class MixerState {
     var phonesRMuted:  Bool = false
 
     /// Per-USB-capture-channel routing — what the DAW sees on each of its
-    /// input channels.  6 entries (DAW input 1..6).  Default values mirror
-    /// what MixControl applies on first launch: capture 1..4 = Analog 1..4,
-    /// capture 5..6 = S/PDIF 1..2.  Persisted to UserDefaults like routes.
-    var captureRoutes: [Int: MixBus] = [
-        0: .analog1, 1: .analog2, 2: .analog3, 3: .analog4,
-        4: .spdif1,  5: .spdif2,
-    ]
+    /// input channels.  Key is capture-channel index, value is source byte.
+    /// Persisted to UserDefaults like routes.
+    var captureRoutes: [Int: UInt8] = [:]
 
-    // Matrix mixer: 18 input channels × 6 mix buses (M1..M6).  The user-
-    // facing knobs are `mixerLevels` + `mixerPans` + `mixerMutes` +
+    // Matrix mixer: 18 input channels × up to 8 mix buses (M1..M8).  The
+    // user-facing knobs are `mixerLevels` + `mixerPans` + `mixerMutes` +
     // `mixerSolos`.  The per-cell gain actually sent to the device is
     // computed on demand by `effectiveGain(...)` from those four fields.
-    var mixerSources: [SignalSource] = Array(repeating: .off, count: 18)
-    /// One fader value per channel per stereo bus pair (M1+M2, M3+M4, M5+M6).
-    /// Range -60…+6 dB, default 0.
-    var mixerLevels: [[Double]] = Array(repeating: Array(repeating: 0, count: 3), count: 18)
-    /// One pan position per channel per stereo bus pair. -1 = full left,
-    /// 0 = center (no attenuation either side), +1 = full right.
-    var mixerPans:   [[Double]] = Array(repeating: Array(repeating: 0, count: 3), count: 18)
+    // Storage uses raw source bytes (from DeviceProfile.sources) rather
+    // than device-specific enums; views resolve display names through
+    // DeviceProfile.source(forByte:).
+    var mixerSources: [UInt8] = Array(repeating: 0xff, count: 18)
+    /// One fader value per channel per stereo bus pair.  Inner dimension
+    /// must be at least mixBusCount/2 (4 for 18i8, 3 for 8i6).  We size
+    /// for the maximum so the model stays profile-agnostic.
+    var mixerLevels: [[Double]] = Array(repeating: Array(repeating: 0, count: 4), count: 18)
+    /// One pan position per channel per stereo bus pair.
+    var mixerPans:   [[Double]] = Array(repeating: Array(repeating: 0, count: 4), count: 18)
     /// Per-channel mute — silences the channel's contribution to every
     /// mix bus.  Matches how M behaves on a real mixer / in MixControl.
     var mixerMutes: [Bool] = Array(repeating: false, count: 18)
@@ -154,13 +151,41 @@ final class MixerState {
     @ObservationIgnored private let maxEvents = 100
     @ObservationIgnored private var coreAudioListenerInstalled = false
     @ObservationIgnored private var lastCoreAudioPresence: Bool = false
-    var selectedBus: MixBus = .m1 {
+    @ObservationIgnored private var didLaunchBackup = false
+    var selectedBusIndex: Int = 0 {
         didSet { saveSelectedBus() }
     }
 
     init() {
+        UserDefaults.standard.register(defaults: [
+            "scarlett.autoBackupOnReset": true,
+            "scarlett.autoBackupOnLaunch": false,
+            "scarlett.autoBackupOnQuit": false,
+        ])
         installCoreAudioListener()
         attemptConnect()
+    }
+
+    /// Formatter for auto-backup timestamps.
+    private static let backupFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+
+    /// Save a snapshot with a descriptive auto-backup label and the
+    /// current device profile name.  Checks the relevant UserDefaults
+    /// toggle before saving — call only when the toggle is already known
+    /// to be true, or use the convenience methods below.
+    func userAutoSaveBackup(label: String) {
+        let ts = Self.backupFormatter.string(from: Date())
+        let tag: String
+        if let name = device?.profile.displayName {
+            tag = "\(name) "
+        } else {
+            tag = ""
+        }
+        userSavePreset(name: "Auto-saved \(label) – \(tag)\(ts)")
     }
 
     /// Try to (re-)open the device and refresh all state.  Idempotent.
@@ -171,19 +196,12 @@ final class MixerState {
         let wasConnected = isConnected
         do {
             let dev = try ScarlettDevice()
-            // We officially support only the 8i6.  Other 1st-gen Scarletts
-            // are detected (so we can tell the user what they have), but
-            // we don't run the matrix/routing flow against them — the byte
-            // tables differ and we'd send wrong commands.
-            guard !dev.profile.isExperimental else {
-                self.device = nil
-                if connection != .unsupported(dev.profile) {
-                    logEvent(.warning, "Connection",
-                             "Detected \(dev.profile.displayName) — not officially supported")
-                }
-                connection = .unsupported(dev.profile)
-                return
-            }
+            // Any DeviceProfile match is fair game: the profile-driven
+            // protocol layer (Phase 1) and profile-keyed storage (Phase 2)
+            // pick the right bytes per device.  `.unsupported` is now only
+            // for PIDs with no DeviceProfile at all — which `ScarlettDevice`
+            // itself throws `deviceNotFound` for, so this branch is
+            // effectively dead code today but kept for forward-compat.
             self.device = dev
             if let bcd = dev.firmwareBCD() {
                 let hi = (bcd >> 8) & 0xff
@@ -196,11 +214,20 @@ final class MixerState {
             refreshFromDevice()
             loadPersistedState()
             ensurePinnedDawChannels()
+            // Push default routes so Mix M1 routing takes effect.
+            pushDefaultRoutes()
             if !wasConnected {
                 logEvent(.info, "Connection",
-                         "Connected to Scarlett 8i6 (firmware \(firmware), serial \(serial))")
+                         "Connected to \(dev.profile.displayName) (firmware \(firmware), serial \(serial))")
             }
             connection = .connected
+            if !didLaunchBackup {
+                didLaunchBackup = true
+                if UserDefaults.standard.bool(forKey: "scarlett.autoBackupOnLaunch") {
+                    userAutoSaveBackup(label: "at launch")
+                    logEvent(.info, "Backup", "Auto-saved launch snapshot")
+                }
+            }
         } catch ScarlettError.deviceNotFound {
             self.device = nil
             // Clear meters so we don't show stale levels frozen from before.
@@ -271,13 +298,13 @@ final class MixerState {
                 self.lastCoreAudioPresence = present
                 if present {
                     self.logEvent(.info, "Core Audio",
-                                  "Scarlett 8i6 visible to Core Audio")
+                                  "Scarlett visible to Core Audio")
                     // Device just appeared — kick a connect attempt so we
                     // don't wait the full 2 s for the polling loop's retry.
                     if !self.isConnected { self.attemptConnect() }
                 } else {
                     self.logEvent(.warning, "Core Audio",
-                                  "Scarlett 8i6 disappeared from Core Audio device list")
+                                  "Scarlett disappeared from Core Audio device list")
                     if self.isConnected {
                         self.device = nil
                         self.connection = .disconnected("Removed from Core Audio")
@@ -347,8 +374,8 @@ final class MixerState {
     private static let firstLaunchDoneKey   = "scarlett.firstLaunchCompleted.v1"
 
     private struct PersistedMatrix: Codable {
-        var levels: [[Double]]      // 18 × 3, per-channel-per-pair
-        var pans: [[Double]]        // 18 × 3
+        var levels: [[Double]]      // 18 × busPairCount, per-channel-per-pair
+        var pans: [[Double]]        // 18 × busPairCount
         var mutes: [Bool]           // 18, per-channel
         var solos: [Bool]           // 18, per-channel
         var sources: [UInt8]        // 18, SignalSource.rawValue per channel
@@ -362,12 +389,11 @@ final class MixerState {
         // Routes — re-push to device so it actually honors them.
         if let data = defaults.data(forKey: Self.routesKey),
            let dict = try? JSONDecoder().decode([UInt16: UInt8].self, from: data) {
-            for (routeRaw, busRaw) in dict {
-                guard let route = Route(rawValue: routeRaw),
-                      let bus = MixBus(rawValue: busRaw) else { continue }
-                routes[route] = bus
-                if let dev = device {
-                    writeAsync { try? dev.setRouteSource(route, from: bus) }
+            for (wValue, sourceByte) in dict {
+                routes[Int(wValue)] = sourceByte
+                if let dev = device,
+                   let output = dev.profile.physicalOutputs.first(where: { $0.wValue == wValue }) {
+                    writeAsync { try? dev.setPhysicalRouteSource(output, sourceByte: sourceByte) }
                 }
             }
         }
@@ -379,9 +405,8 @@ final class MixerState {
         // defaults active (Analog/SPDIF → DAW captures) which is fine.
         if let data = defaults.data(forKey: Self.captureRoutesKey),
            let dict = try? JSONDecoder().decode([UInt16: UInt8].self, from: data) {
-            for (chRaw, busRaw) in dict {
-                guard let bus = MixBus(rawValue: busRaw) else { continue }
-                captureRoutes[Int(chRaw)] = bus
+            for (ch, sourceByte) in dict {
+                captureRoutes[Int(ch)] = sourceByte
             }
         }
 
@@ -389,12 +414,11 @@ final class MixerState {
         // device remembers this across power cycles too.
         monitorMono = defaults.bool(forKey: Self.monitorMonoKey)
 
-        // Selected bus tab
-        // Persisted bus index is the matrix-index (0..5), not the byte value,
-        // for stability across enum byte-value changes.
+        // Selected bus tab — persisted as a plain UInt8 index (0..mixBusCount).
         if let raw = defaults.object(forKey: Self.busTabKey) as? UInt8,
-           raw < UInt8(MixBus.matrixOutputs.count) {
-            selectedBus = MixBus.matrixOutputs[Int(raw)]
+           let p = device?.profile,
+           raw < UInt8(p.mixBusCount) {
+            selectedBusIndex = Int(raw)
         }
 
         // Matrix state: mute/solo/names/links/sources/levels/pans.
@@ -404,26 +428,24 @@ final class MixerState {
         // the UI says regardless of what state the device booted in.
         if let data = defaults.data(forKey: Self.matrixKey),
            let m = try? JSONDecoder().decode(PersistedMatrix.self, from: data),
-           m.levels.count == 18, m.levels.allSatisfy({ $0.count == 3 }),
-           m.pans.count   == 18, m.pans.allSatisfy({ $0.count == 3 }),
+           m.levels.count == 18, m.levels.allSatisfy({ $0.count >= 3 }),
+           m.pans.count   == 18, m.pans.allSatisfy({ $0.count >= 3 }),
            m.mutes.count  == 18, m.solos.count == 18,
            m.sources.count == 18, m.names.count == 18
         {
-            mixerLevels = m.levels
-            mixerPans = m.pans
+            mixerLevels = m.levels.map { $0 + Array(repeating: 0, count: max(0, 4 - $0.count)) }
+            mixerPans = m.pans.map { $0 + Array(repeating: 0, count: max(0, 4 - $0.count)) }
             mixerMutes = m.mutes
             mixerSolos = m.solos
             mixerNames = m.names
             linkedPairs = Set(m.linkedLefts)
             for ch in 0..<18 {
-                if let v = SignalSource(rawValue: m.sources[ch]) {
-                    mixerSources[ch] = v
-                }
+                mixerSources[ch] = m.sources[ch]
             }
-            if device != nil {
+            if let p = device?.profile {
                 for ch in 0..<18 {
-                    for bus in MixBus.matrixOutputs {
-                        pushCellGain(channel: ch, bus: bus)
+                    for bus in 0..<p.mixBusCount {
+                        pushCellGainRaw(channel: ch, busIndex: bus)
                     }
                 }
             }
@@ -460,7 +482,7 @@ final class MixerState {
 
     private func saveRoutes() {
         let dict = Dictionary(uniqueKeysWithValues:
-            routes.map { ($0.key.rawValue, $0.value.rawValue) })
+            routes.map { (UInt16($0.key), $0.value) })
         if let data = try? JSONEncoder().encode(dict) {
             UserDefaults.standard.set(data, forKey: Self.routesKey)
         }
@@ -468,7 +490,7 @@ final class MixerState {
 
     private func saveCaptureRoutes() {
         let dict = Dictionary(uniqueKeysWithValues:
-            captureRoutes.map { (UInt16($0.key), $0.value.rawValue) })
+            captureRoutes.map { (UInt16($0.key), $0.value) })
         if let data = try? JSONEncoder().encode(dict) {
             UserDefaults.standard.set(data, forKey: Self.captureRoutesKey)
         }
@@ -479,9 +501,7 @@ final class MixerState {
     }
 
     private func saveSelectedBus() {
-        // Save the matrix index (0..5) rather than the raw byte so the
-        // persisted value survives any future enum byte-value change.
-        UserDefaults.standard.set(UInt8(selectedBus.matrixIndex ?? 0), forKey: Self.busTabKey)
+        UserDefaults.standard.set(UInt8(selectedBusIndex), forKey: Self.busTabKey)
     }
 
     private func saveMatrix() {
@@ -490,7 +510,7 @@ final class MixerState {
             pans: mixerPans,
             mutes: mixerMutes,
             solos: mixerSolos,
-            sources: mixerSources.map { $0.rawValue },
+            sources: mixerSources,
             names: mixerNames,
             linkedLefts: Array(linkedPairs)
         )
@@ -499,7 +519,7 @@ final class MixerState {
         }
     }
 
-    private func savePresets() {
+    func savePresets() {
         if let data = try? JSONEncoder().encode(presets) {
             UserDefaults.standard.set(data, forKey: Self.presetsKey)
         }
@@ -555,21 +575,21 @@ final class MixerState {
         // reads.  We pull them all into a local [[Double]] just long enough
         // to derive the user-facing level + pan model — there's no separate
         // persistent gains field.
-        var snapshotGains: [[Double]] = Array(repeating: Array(repeating: 0, count: 6),
+        let mixBusCount = dev.profile.mixBusCount
+        var snapshotGains: [[Double]] = Array(repeating: Array(repeating: 0, count: mixBusCount),
                                               count: 18)
         for ch in 0..<18 {
-            if let v = try? dev.getMixerSource(channel: ch) {
+            if let v = try? dev.getMixerSourceByte(channel: ch) {
                 mixerSources[ch] = v
             }
-            for bus in MixBus.matrixOutputs {
-                guard let idx = bus.matrixIndex else { continue }
-                if let v = try? dev.getMixerGain(channel: ch, bus: bus) {
-                    snapshotGains[ch][idx] = v
+            for busIdx in 0..<mixBusCount {
+                if let v = try? dev.getMixerGainRaw(channel: ch, busIndex: busIdx) {
+                    snapshotGains[ch][busIdx] = v
                 }
             }
         }
         for ch in 0..<18 {
-            for pair in 0..<3 {
+            for pair in 0..<mixBusCount / 2 {
                 let (level, pan) = Self.deriveLevelAndPan(
                     left:  snapshotGains[ch][pair * 2],
                     right: snapshotGains[ch][pair * 2 + 1]
@@ -725,21 +745,22 @@ final class MixerState {
 
     // MARK: - Routing
 
-    func userSetRoute(_ route: Route, to source: MixBus) {
-        routes[route] = source
+    func userSetRoute(wValue: Int, sourceByte: UInt8) {
+        routes[wValue] = sourceByte
         saveRoutes()
-        guard let dev = device else { return }
-        writeAsync { try? dev.setRouteSource(route, from: source) }
+        guard let dev = device,
+              let output = dev.profile.physicalOutputs.first(where: { $0.wValue == UInt16(wValue) })
+        else { return }
+        writeAsync { try? dev.setPhysicalRouteSource(output, sourceByte: sourceByte) }
     }
 
-    /// Set what the DAW sees on USB capture channel `channel` (0..5 on the
-    /// 8i6).  Persists and pushes to the device.
-    func userSetCaptureRoute(channel: Int, to source: MixBus) {
-        guard (0...7).contains(channel) else { return }
-        captureRoutes[channel] = source
+    /// Set what the DAW sees on USB capture channel `channel`.
+    /// Persists and pushes to the device.
+    func userSetCaptureRoute(channel: Int, sourceByte: UInt8) {
+        captureRoutes[channel] = sourceByte
         saveCaptureRoutes()
         guard let dev = device else { return }
-        writeAsync { try? dev.setCaptureRoute(channel: channel, from: source) }
+        writeAsync { try? dev.setCaptureRouteSource(channel: channel, sourceByte: sourceByte) }
     }
 
     // MARK: - Monitor mono
@@ -841,11 +862,11 @@ final class MixerState {
     static func pairIndex(of bus: MixBus) -> Int { bus.stereoPairIndex ?? 0 }
     static func isLeftSide(of bus: MixBus) -> Bool { bus.isLeftOfPair }
 
-    func userSetMixerSource(channel: Int, source: SignalSource) {
+    func userSetMixerSource(channel: Int, sourceByte: UInt8) {
         guard (0..<18).contains(channel) else { return }
-        mixerSources[channel] = source
+        mixerSources[channel] = sourceByte
         guard let dev = device else { return }
-        writeAsync { try? dev.setMixerSource(channel: channel, source: source) }
+        writeAsync { try? dev.setMixerSourceByte(channel: channel, sourceByte: sourceByte) }
     }
 
     // MARK: - Pinned DAW return
@@ -872,11 +893,12 @@ final class MixerState {
         // DAW 1 is already wired to (say) ch 0 from the factory default, a
         // bare `setMixerSource(14, .daw1)` is silently rejected and ch 14
         // stays pointed at whatever it was sourced from before.  We have to
-        // disconnect the existing owner with `.off` first.
-        assignPinnedSource(channel: l, source: .daw1)
-        assignPinnedSource(channel: r, source: .daw2)
+        // disconnect the existing owner with `0xff` (Off) first.
+        assignPinnedSource(channel: l, sourceByte: 0x00)  // DAW 1
+        assignPinnedSource(channel: r, sourceByte: 0x01)  // DAW 2
 
-        for pair in 0..<3 {
+        let busPairs = min((device?.profile.mixBusCount ?? 6) / 2, mixerPans[l].count)
+        for pair in 0..<busPairs {
             if mixerPans[l][pair] != -1 { userSetMixerPan(channel: l, pair: pair, pan: -1) }
             if mixerPans[r][pair] !=  1 { userSetMixerPan(channel: r, pair: pair, pan:  1) }
         }
@@ -889,20 +911,20 @@ final class MixerState {
     /// Helper for `ensurePinnedDawChannels`: claim a specific source for one
     /// channel, disconnecting it from any other channel that currently holds
     /// it.  Skips work if the target already has the desired source.
-    private func assignPinnedSource(channel target: Int, source desired: SignalSource) {
+    private func assignPinnedSource(channel target: Int, sourceByte desired: UInt8) {
         guard (0..<18).contains(target) else { return }
         if mixerSources[target] == desired { return }
 
         // Disconnect any other channel that currently has this source —
         // otherwise the device won't reassign it to us.
         for ch in 0..<18 where ch != target && mixerSources[ch] == desired {
-            userSetMixerSource(channel: ch, source: .off)
+            userSetMixerSource(channel: ch, sourceByte: 0xff)
         }
 
         // Now claim it on the target.  These writes are queued on the same
         // serial USB queue, so the disconnect above lands before the new
         // assignment hits the device.
-        userSetMixerSource(channel: target, source: desired)
+        userSetMixerSource(channel: target, sourceByte: desired)
     }
 
     // MARK: - Stereo link
@@ -923,17 +945,31 @@ final class MixerState {
         let left = Self.leftOfPair(ch)
         if linkedPairs.contains(left) {
             linkedPairs.remove(left)
+            for pair in 0..<busPairCount {
+                mixerPans[left][pair] = 0
+                mixerPans[left + 1][pair] = 0
+                pushBusPair(channel: left, pair: pair)
+            }
         } else {
             linkedPairs.insert(left)
+            for pair in 0..<busPairCount {
+                mixerPans[left][pair] = -1
+                mixerPans[left + 1][pair] = 1
+                pushBusPair(channel: left, pair: pair)
+            }
         }
         saveMatrix()
     }
+
+    /// Number of stereo bus pairs (mixBusCount / 2).  Profile-driven so
+    /// it's 3 on 8i6/18i6 and 4 on 18i8 without hardcoding.
+    private var busPairCount: Int { (device?.profile.mixBusCount ?? 6) / 2 }
 
     /// Set the channel-level fader for one stereo bus pair. Pushes both cells
     /// (L and R) in that pair to the device.  If the channel is in a linked
     /// stereo pair, the partner's level for the same pair moves with it.
     func userSetMixerLevel(channel: Int, pair: Int, level: Double) {
-        guard (0..<18).contains(channel), (0..<3).contains(pair) else { return }
+        guard (0..<18).contains(channel), (0..<busPairCount).contains(pair) else { return }
         mixerLevels[channel][pair] = level
         pushBusPair(channel: channel, pair: pair)
         if let partner = linkedPartner(channel) {
@@ -946,20 +982,24 @@ final class MixerState {
     /// Set the L↔R pan for one stereo bus pair on one channel. Snaps to
     /// center when within ±0.04.
     func userSetMixerPan(channel: Int, pair: Int, pan: Double) {
-        guard (0..<18).contains(channel), (0..<3).contains(pair) else { return }
+        guard (0..<18).contains(channel), (0..<busPairCount).contains(pair) else { return }
         let snapped = abs(pan) < 0.04 ? 0 : max(-1, min(1, pan))
         mixerPans[channel][pair] = snapped
         pushBusPair(channel: channel, pair: pair)
+        if let partner = linkedPartner(channel) {
+            let partnerPan = -snapped
+            mixerPans[partner][pair] = partnerPan
+            pushBusPair(channel: partner, pair: pair)
+        }
         saveMatrix()
     }
 
     private func pushBusPair(channel: Int, pair: Int) {
-        let outs = MixBus.matrixOutputs
         let leftIdx = pair * 2
         let rightIdx = pair * 2 + 1
-        guard leftIdx < outs.count, rightIdx < outs.count else { return }
-        pushCellGain(channel: channel, bus: outs[leftIdx])
-        pushCellGain(channel: channel, bus: outs[rightIdx])
+        guard let p = device?.profile, leftIdx < p.mixBusCount, rightIdx < p.mixBusCount else { return }
+        pushCellGainRaw(channel: channel, busIndex: leftIdx)
+        pushCellGainRaw(channel: channel, busIndex: rightIdx)
     }
 
     func userSetChannelName(channel: Int, name: String) {
@@ -973,38 +1013,15 @@ final class MixerState {
         peaksMax = .empty
     }
 
-    /// Reset the all-time max peak for one signal source / mix-bus source.
-    /// Both old call-sites (`forSource`, `forMixBus`) collapse into this one
-    /// once we map a `SignalSource` to its `MixBus` equivalent.
-    func clearMaxPeak(_ source: MixBus) {
-        switch source {
-        case .daw1:    peaksMax.daw[0] = -.infinity
-        case .daw2:    peaksMax.daw[1] = -.infinity
-        case .daw3:    peaksMax.daw[2] = -.infinity
-        case .daw4:    peaksMax.daw[3] = -.infinity
-        case .daw5:    peaksMax.daw[4] = -.infinity
-        case .daw6:    peaksMax.daw[5] = -.infinity
-        case .analog1: peaksMax.inputs[0] = -.infinity
-        case .analog2: peaksMax.inputs[1] = -.infinity
-        case .analog3: peaksMax.inputs[2] = -.infinity
-        case .analog4: peaksMax.inputs[3] = -.infinity
-        case .spdif1:  peaksMax.inputs[8] = -.infinity
-        case .spdif2:  peaksMax.inputs[9] = -.infinity
-        case .m1:      peaksMax.mixer[0] = -.infinity
-        case .m2:      peaksMax.mixer[1] = -.infinity
-        case .m3:      peaksMax.mixer[2] = -.infinity
-        case .m4:      peaksMax.mixer[3] = -.infinity
-        case .m5:      peaksMax.mixer[4] = -.infinity
-        case .m6:      peaksMax.mixer[5] = -.infinity
-        case .off, .daw7, .daw8, .daw9, .daw10, .daw11, .daw12: break
+    /// Reset a single source's max-peak track (clicking "Mx" on a strip).
+    func clearMaxPeak(forByte byte: UInt8) {
+        guard let profile = device?.profile,
+              let slot = profile.peakSlot(forByte: byte) else { return }
+        switch slot {
+        case .input(let i):  if peaksMax.inputs.indices.contains(i) { peaksMax.inputs[i] = -.infinity }
+        case .daw(let i):    if peaksMax.daw.indices.contains(i)    { peaksMax.daw[i]    = -.infinity }
+        case .mixer(let i):  if peaksMax.mixer.indices.contains(i)  { peaksMax.mixer[i]  = -.infinity }
         }
-    }
-
-    /// Convenience wrapper so `SignalSource`-typed call-sites (matrix-channel
-    /// strips) don't need to construct a `MixBus` themselves.  Every valid
-    /// `SignalSource` has the same raw byte value in `MixBus`.
-    func clearMaxPeak(forSource source: SignalSource) {
-        clearMaxPeak(MixBus(rawValue: source.rawValue) ?? .off)
     }
 
     // MARK: - Presets
@@ -1018,15 +1035,15 @@ final class MixerState {
             name: trimmed,
             createdAt: Date(),
             routes: Dictionary(uniqueKeysWithValues:
-                routes.map { ($0.key.rawValue, $0.value.rawValue) }),
-            mixerSources: mixerSources.map { $0.rawValue },
+                routes.map { (UInt16($0.key), $0.value) }),
+            mixerSources: mixerSources,
             mixerLevels: mixerLevels,
             mixerPans: mixerPans,
             mixerMutes: mixerMutes,
             mixerSolos: mixerSolos,
             mixerNames: mixerNames,
             linkedLefts: Array(linkedPairs),
-            selectedBus: UInt8(selectedBus.matrixIndex ?? 0)
+            selectedBus: UInt8(selectedBusIndex)
         )
 
         // Replace any preset with the same name; otherwise append.
@@ -1039,23 +1056,23 @@ final class MixerState {
     }
 
     func userLoadPreset(_ preset: ScarlettPreset) {
-        guard let dev = device else { return }
+        guard let dev = device, let p = device?.profile else { return }
 
         // Routes
-        for (routeRaw, busRaw) in preset.routes {
-            guard let route = Route(rawValue: routeRaw),
-                  let bus = MixBus(rawValue: busRaw) else { continue }
-            routes[route] = bus
-            writeAsync { try? dev.setRouteSource(route, from: bus) }
+        for (routeRaw, busByte) in preset.routes {
+            routes[Int(routeRaw)] = busByte
+            if let output = p.physicalOutputs.first(where: { $0.wValue == routeRaw }) {
+                writeAsync { try? dev.setPhysicalRouteSource(output, sourceByte: busByte) }
+            }
         }
         saveRoutes()
 
         // Matrix sources
         if preset.mixerSources.count == 18 {
             for ch in 0..<18 {
-                guard let src = SignalSource(rawValue: preset.mixerSources[ch]) else { continue }
-                mixerSources[ch] = src
-                writeAsync { try? dev.setMixerSource(channel: ch, source: src) }
+                let byte = preset.mixerSources[ch]
+                mixerSources[ch] = byte
+                writeAsync { try? dev.setMixerSourceByte(channel: ch, sourceByte: byte) }
             }
         }
 
@@ -1063,23 +1080,24 @@ final class MixerState {
         // pushing cells so `effectiveGain` sees the right state.
         if preset.mixerMutes.count == 18 { mixerMutes = preset.mixerMutes }
         if preset.mixerSolos.count == 18 { mixerSolos = preset.mixerSolos }
-        if preset.mixerLevels.count == 18, preset.mixerLevels.allSatisfy({ $0.count == 3 }) {
-            mixerLevels = preset.mixerLevels
+        if preset.mixerLevels.count == 18, preset.mixerLevels.allSatisfy({ $0.count >= 3 }) {
+            mixerLevels = preset.mixerLevels.map { $0 + Array(repeating: 0, count: max(0, 4 - $0.count)) }
         }
-        if preset.mixerPans.count == 18, preset.mixerPans.allSatisfy({ $0.count == 3 }) {
-            mixerPans = preset.mixerPans
+        if preset.mixerPans.count == 18, preset.mixerPans.allSatisfy({ $0.count >= 3 }) {
+            mixerPans = preset.mixerPans.map { $0 + Array(repeating: 0, count: max(0, 4 - $0.count)) }
         }
         if preset.mixerNames.count == 18 { mixerNames = preset.mixerNames }
         linkedPairs = Set(preset.linkedLefts)
 
+        guard let p = device?.profile else { return }
         for ch in 0..<18 {
-            for bus in MixBus.matrixOutputs {
-                pushCellGain(channel: ch, bus: bus)
+            for bus in 0..<p.mixBusCount {
+                pushCellGainRaw(channel: ch, busIndex: bus)
             }
         }
 
-        if preset.selectedBus < UInt8(MixBus.matrixOutputs.count) {
-            selectedBus = MixBus.matrixOutputs[Int(preset.selectedBus)]
+        if preset.selectedBus < UInt8(p.mixBusCount) {
+            selectedBusIndex = Int(preset.selectedBus)
         }
 
         saveMatrix()
@@ -1099,19 +1117,19 @@ final class MixerState {
             name: name,
             createdAt: Date(),
             routes: Dictionary(uniqueKeysWithValues:
-                routes.map { ($0.key.rawValue, $0.value.rawValue) }),
-            mixerSources: mixerSources.map { $0.rawValue },
+                routes.map { (UInt16($0.key), $0.value) }),
+            mixerSources: mixerSources,
             mixerLevels: mixerLevels,
             mixerPans: mixerPans,
             mixerMutes: mixerMutes,
             mixerSolos: mixerSolos,
             mixerNames: mixerNames,
             linkedLefts: Array(linkedPairs),
-            selectedBus: UInt8(selectedBus.matrixIndex ?? 0)
+            selectedBus: UInt8(selectedBusIndex)
         )
     }
 
-    /// Export the current state to a `.8i6` file at the given URL.  The file
+    /// Export the current state to a snapshot file at the given URL.  The file
     /// format is JSON-encoded `ScarlettPreset` for cross-compatibility with
     /// the in-app preset list (you can save a file, then load it back as a
     /// preset and vice versa).
@@ -1124,7 +1142,7 @@ final class MixerState {
         logEvent(.info, "Export", "Exported snapshot to \(url.lastPathComponent)")
     }
 
-    /// Import a `.8i6` snapshot file from the given URL and apply it
+    /// Import a snapshot file from the given URL and apply it
     /// (routes + matrix + sources) the same way `userLoadPreset` does.
     func userImportSnapshot(from url: URL) throws {
         let data = try Data(contentsOf: url)
@@ -1145,56 +1163,75 @@ final class MixerState {
     ///   the matrix if the user wants to.
     /// Hardware switches (impedance / hi-lo), clock, sample rate and master
     /// output attenuation are left alone.
+    /// Push default routes (Monitor + Phones ← Mix M1) to the device.
+    /// Called on every connect so the new routing takes effect regardless
+    /// of old UserDefaults or flash state.
+    func pushDefaultRoutes() {
+        guard let dev = device else { return }
+        let mixBuses = dev.profile.mixBusSources
+        let m1 = mixBuses.count > 0 ? mixBuses[0].byte : 0xff
+        let m2 = mixBuses.count > 1 ? mixBuses[1].byte : m1
+        for output in dev.profile.physicalOutputs {
+            let src: UInt8 = output.isLeft ? m1 : m2
+            routes[Int(output.wValue)] = src
+            writeAsync { try? dev.setPhysicalRouteSource(output, sourceByte: src) }
+        }
+        saveRoutes()
+    }
+
+    /// Push all output attenuators to 0 dB (unity gain).  Called on every
+    /// connect because the device's flash may have atten at -inf from a
+    /// previous session with MixControl or a factory reset.
+    func pushDefaultAttenuation() {
+        // Temporarily disabled — the 18i8 firmware brute-force was
+        // disconnecting USB.  The device's factory flash may already
+        // have output atten at 0 dB.  Revisit after probing the correct
+        // register address for the 18i8's phones output.
+    }
+
     func userResetRoutingAndMatrix() {
-        let defaultRoutes: [(Route, MixBus)] = [
-            (.monitorLeft,  .daw1),
-            (.monitorRight, .daw2),
-            (.phonesLeft,   .daw1),
-            (.phonesRight,  .daw2),
-            (.spdifLeft,    .off),
-            (.spdifRight,   .off),
-        ]
-        for (route, source) in defaultRoutes {
-            routes[route] = source
-            if let dev = device {
-                writeAsync { try? dev.setRouteSource(route, from: source) }
-            }
+        guard let dev = device else { return }
+        let mixBuses = dev.profile.mixBusSources
+        let m1 = mixBuses.count > 0 ? mixBuses[0].byte : 0xff
+        let m2 = mixBuses.count > 1 ? mixBuses[1].byte : m1
+        for output in dev.profile.physicalOutputs {
+            let src: UInt8 = output.isLeft ? m1 : m2
+            routes[Int(output.wValue)] = src
+            writeAsync { try? dev.setPhysicalRouteSource(output, sourceByte: src) }
         }
         saveRoutes()
 
         // Reset matrix levels / pans / mutes / solos to defaults.
-        mixerLevels = Array(repeating: Array(repeating: 0, count: 3), count: 18)
-        mixerPans   = Array(repeating: Array(repeating: 0, count: 3), count: 18)
+        mixerLevels = Array(repeating: Array(repeating: 0, count: 4), count: 18)
+        mixerPans   = Array(repeating: Array(repeating: 0, count: 4), count: 18)
         mixerMutes  = Array(repeating: false, count: 18)
         mixerSolos  = Array(repeating: false, count: 18)
         linkedPairs = []
 
-        // Reset matrix sources to a sensible default: Ch 1..4 → Analog 1..4,
-        // Ch 5..6 → S/PDIF 1..2, Ch 7..13 → Off, Ch 14..15 reserved for the
-        // pinned DAW return (set below).  We disconnect every channel first
-        // (set to .off on the device) so the disconnect-first rule doesn't
-        // bite when we reassign the analog/spdif inputs.
-        let defaultSources: [SignalSource] = [
-            .analog1, .analog2, .analog3, .analog4,    // 0..3
-            .spdif1,  .spdif2,                          // 4..5
-            .off, .off, .off, .off, .off, .off, .off, .off,  // 6..13
-            .off, .off,                                 // 14..15 (pinned DAW assigns these)
-            .off, .off,                                 // 16..17
-        ]
+        // Reset matrix sources to a sensible default: wires profile's first
+        // few analog + digital sources to the first 6 matrix channels.
         // First pass: clear everything on the device so reassignment can't
         // hit the firmware's "source already wired" silent rejection.
         for ch in 0..<18 {
-            mixerSources[ch] = .off
+            mixerSources[ch] = 0xff  // Off byte
             if let dev = device {
-                writeAsync { try? dev.setMixerSource(channel: ch, source: .off) }
+                writeAsync { try? dev.setMixerSourceByte(channel: ch, sourceByte: 0xff) }
             }
         }
-        // Second pass: assign the real defaults for ch 0..5.
+        // Second pass: assign the real defaults using source bytes from the
+        // connected profile (or a reasonable fallback for 8i6).
+        let p = device?.profile ?? .scarlett8i6
+        let defaultBytes: [UInt8] = {
+            let analogs = p.sources.filter { $0.category == .analog }.prefix(4).map(\.byte)
+            let digitals = p.sources.filter { $0.category == .digital }.prefix(2).map(\.byte)
+            let offs = [UInt8](repeating: 0xff, count: 12)
+            return Array((analogs + digitals + offs).prefix(18))
+        }()
         for ch in 0..<6 {
-            let src = defaultSources[ch]
-            mixerSources[ch] = src
-            if let dev = device, src != .off {
-                writeAsync { try? dev.setMixerSource(channel: ch, source: src) }
+            let byte = defaultBytes[ch]
+            mixerSources[ch] = byte
+            if byte != 0xff, let dev = device {
+                writeAsync { try? dev.setMixerSourceByte(channel: ch, sourceByte: byte) }
             }
         }
 
@@ -1203,21 +1240,24 @@ final class MixerState {
 
         // Push every cell to the device with the new state.
         for ch in 0..<18 {
-            for bus in MixBus.matrixOutputs {
-                pushCellGain(channel: ch, bus: bus)
+            for bus in 0..<p.mixBusCount {
+                pushCellGainRaw(channel: ch, busIndex: bus)
             }
         }
 
-        // Capture routes back to factory: 1..4 = Analog, 5..6 = S/PDIF.
-        let defaultCaptureRoutes: [(Int, MixBus)] = [
-            (0, .analog1), (1, .analog2), (2, .analog3), (3, .analog4),
-            (4, .spdif1),  (5, .spdif2),
-        ]
+        // Capture routes back to factory: first 4 analog + first 2 digital.
         captureRoutes.removeAll(keepingCapacity: true)
-        for (ch, src) in defaultCaptureRoutes {
-            captureRoutes[ch] = src
-            if let dev = device {
-                writeAsync { try? dev.setCaptureRoute(channel: ch, from: src) }
+        let capAnalogs = p.sources.filter { $0.category == .analog }.prefix(4)
+        let capDigitals = p.sources.filter { $0.category == .digital }.prefix(2)
+        for (ch, sd) in capAnalogs.enumerated() {
+            captureRoutes[ch] = sd.byte
+        }
+        for (ch, sd) in capDigitals.enumerated() {
+            captureRoutes[4 + ch] = sd.byte
+        }
+        if let dev = device {
+            for (ch, byte) in captureRoutes {
+                writeAsync { try? dev.setCaptureRouteSource(channel: ch, sourceByte: byte) }
             }
         }
         saveCaptureRoutes()
@@ -1228,7 +1268,7 @@ final class MixerState {
         }
 
         saveMatrix()
-        logEvent(.info, "Reset", "Default config applied (Monitor + Phones = DAW 1/2)")
+        logEvent(.info, "Reset", "Default config applied (outputs routed M1/M2 stereo)")
     }
 
     /// Set the channel-wide mute directly (no toggle, no link propagation).
@@ -1277,15 +1317,16 @@ final class MixerState {
     /// channel-wide field (mute / solo) changes — every bus this
     /// channel feeds needs the new effective gain.
     private func pushAllCells(forChannel channel: Int) {
-        for bus in MixBus.matrixOutputs {
-            pushCellGain(channel: channel, bus: bus)
+        guard let p = device?.profile else { return }
+        for bus in 0..<p.mixBusCount {
+            pushCellGainRaw(channel: channel, busIndex: bus)
         }
     }
 
-    private func pushCellGain(channel: Int, bus: MixBus) {
-        guard let dev = device, let busIdx = bus.matrixIndex else { return }
-        let db = effectiveGain(channel: channel, busIdx: busIdx)
-        writeAsync { try? dev.setMixerGain(channel: channel, bus: bus, db: db) }
+    private func pushCellGainRaw(channel: Int, busIndex: Int) {
+        guard let dev = device else { return }
+        let db = effectiveGain(channel: channel, busIdx: busIndex)
+        writeAsync { try? dev.setMixerGainRaw(channel: channel, busIndex: busIndex, db: db) }
     }
 
     // MARK: - Copy mix to another bus
@@ -1296,13 +1337,11 @@ final class MixerState {
     /// source bus to the destination bus).  Useful for "make M3+M4 = M1+M2".
     ///
     /// `from` and `to` are the bus's stereo pair (0 = M1+M2, 1 = M3+M4,
-    /// 2 = M5+M6).  This works at the *pair* granularity because levels and
-    /// pans live per-pair; mute/solo are per-cell so both members of the
-    /// destination pair get updated.
+    /// 2 = M5+M6, 3 = M7+M8 on devices that have 8 buses).
     func userCopyMixPair(from sourcePair: Int, to destPair: Int) {
         guard sourcePair != destPair,
-              (0...2).contains(sourcePair),
-              (0...2).contains(destPair) else { return }
+              (0..<busPairCount).contains(sourcePair),
+              (0..<busPairCount).contains(destPair) else { return }
         // Mute and solo are now channel-wide, so copying a pair only
         // copies the per-pair level + pan into the destination.
         for ch in 0..<18 {
