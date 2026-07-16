@@ -9,6 +9,7 @@ struct PresetsView: View {
     @State private var loadErrorMessage: String?
     @State private var renamingPresetID: UUID?
     @State private var renameText: String = ""
+    @FocusState private var nameFocused: Bool
 
     @AppStorage("scarlett.autoBackupOnReset")  private var autoBackupOnReset = true
     @AppStorage("scarlett.autoBackupOnLaunch") private var autoBackupOnLaunch = false
@@ -209,10 +210,15 @@ struct PresetsView: View {
             if renamingPresetID == preset.id {
                 TextField("Preset name", text: $renameText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 200)
+                    .focused($nameFocused)
                     .onSubmit { commitRename(preset) }
                     .onExitCommand { renamingPresetID = nil }
-                    .onAppear { renameText = preset.name }
+                    .onAppear {
+                        renameText = preset.name
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            nameFocused = true
+                        }
+                    }
             } else {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(preset.name).font(.subheadline.bold()).foregroundStyle(Theme.textPrimary)
