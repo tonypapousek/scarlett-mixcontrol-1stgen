@@ -9,7 +9,7 @@ import SwiftUI
 /// by `DbScale`, so the same coordinate math drives both.
 struct VerticalFader: View {
     @Binding var db: Double
-    var height: CGFloat = 220
+    var height: CGFloat = StripLayout.faderHeight
     var dbRange: ClosedRange<Double> = Self.defaultRange
 
     static let defaultRange: ClosedRange<Double> = -60...6
@@ -80,7 +80,7 @@ struct VerticalFader: View {
 
 /// Static dB-scale tick column rendered beside the fader.
 struct DbScale: View {
-    var height: CGFloat = 220
+    var height: CGFloat = StripLayout.faderHeight
     var dbRange: ClosedRange<Double> = VerticalFader.defaultRange
     var marks: [Int] = [0, -6, -12, -18, -24, -30, -36, -48, -60]
 
@@ -120,7 +120,7 @@ struct VerticalMeter: View {
     var db: Double
     var peakDb: Double = -.infinity
     var maxPeakDb: Double = -.infinity
-    var height: CGFloat = 220
+    var height: CGFloat = StripLayout.faderHeight
     private let dbMin: Double = -60
     private let dbMax: Double = 0
     private let width: CGFloat = 6

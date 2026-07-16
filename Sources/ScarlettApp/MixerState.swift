@@ -194,6 +194,7 @@ final class MixerState {
     @ObservationIgnored private let maxEvents = 100
     @ObservationIgnored private var coreAudioListenerInstalled = false
     @ObservationIgnored private var lastCoreAudioPresence: Bool = false
+    @ObservationIgnored private var didLaunchBackup = false
     var selectedBus: MixBus = .m1 {
         didSet {
             if !restoringProfileState { saveSelectedBus() }
@@ -201,12 +202,32 @@ final class MixerState {
     }
 
     init() {
+        UserDefaults.standard.register(defaults: [
+            "scarlett.autoBackupOnReset": true,
+            "scarlett.autoBackupOnLaunch": false,
+            "scarlett.autoBackupOnQuit": true,
+        ])
         installCoreAudioListener()
         // Defer USB work so the window can appear before we sync-read the
         // matrix (100+ control transfers when a device is connected).
         Task { @MainActor in
             attemptConnect()
         }
+    }
+
+    /// Formatter for auto-backup timestamps.
+    private static let backupFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+
+    /// Save a snapshot with a descriptive auto-backup label and the
+    /// current device profile name.
+    func userAutoSaveBackup(label: String) {
+        let ts = Self.backupFormatter.string(from: Date())
+        let tag = "\(profile.displayName) "
+        userSavePreset(name: "Auto-saved \(label) – \(tag)\(ts)")
     }
 
     /// Try to (re-)open the device and refresh all state.  Idempotent.
@@ -246,6 +267,13 @@ final class MixerState {
                          "Connected to \(dev.profile.displayName) (firmware \(firmware), serial \(serial))")
             }
             connection = .connected
+            if !didLaunchBackup {
+                didLaunchBackup = true
+                if UserDefaults.standard.bool(forKey: "scarlett.autoBackupOnLaunch") {
+                    userAutoSaveBackup(label: "at launch")
+                    logEvent(.info, "Backup", "Auto-saved launch snapshot")
+                }
+            }
         } catch ScarlettError.deviceNotFound {
             restoringProfileState = false
             self.device = nil
@@ -1045,8 +1073,20 @@ final class MixerState {
         let left = Self.leftOfPair(ch)
         if linkedPairs.contains(left) {
             linkedPairs.remove(left)
+            for pair in 0..<stereoPairCount {
+                mixerPans[left][pair] = 0
+                mixerPans[left + 1][pair] = 0
+                pushBusPair(channel: left, pair: pair)
+                pushBusPair(channel: left + 1, pair: pair)
+            }
         } else {
             linkedPairs.insert(left)
+            for pair in 0..<stereoPairCount {
+                mixerPans[left][pair] = -1
+                mixerPans[left + 1][pair] = 1
+                pushBusPair(channel: left, pair: pair)
+                pushBusPair(channel: left + 1, pair: pair)
+            }
         }
         saveMatrix()
     }
@@ -1072,6 +1112,10 @@ final class MixerState {
         let snapped = abs(pan) < 0.04 ? 0 : max(-1, min(1, pan))
         mixerPans[channel][pair] = snapped
         pushBusPair(channel: channel, pair: pair)
+        if let partner = linkedPartner(channel) {
+            mixerPans[partner][pair] = -snapped
+            pushBusPair(channel: partner, pair: pair)
+        }
         saveMatrix()
     }
 

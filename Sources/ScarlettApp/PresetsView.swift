@@ -7,6 +7,7 @@ struct PresetsView: View {
     @State private var newPresetName: String = ""
     @State private var confirmDelete: ScarlettPreset?
     @State private var loadErrorMessage: String?
+    @AppStorage("scarlett.autoBackupOnReset") private var autoBackupOnReset = true
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -34,15 +35,17 @@ struct PresetsView: View {
                         .font(.caption).foregroundStyle(Theme.textSecondary)
                 }
                 Panel(title: "Saved presets") {
-                    if state.presets.isEmpty {
-                        Text("No presets yet — save one above.")
-                            .font(.caption).foregroundStyle(Theme.textSecondary)
-                            .padding(.vertical, 6)
-                    } else {
-                        VStack(spacing: 4) {
+                    VStack(spacing: 4) {
+                        defaultPresetRow
+                        if !state.presets.isEmpty {
+                            Divider().overlay(Theme.divider)
                             ForEach(state.presets.sorted(by: { $0.createdAt > $1.createdAt })) { preset in
                                 presetRow(preset)
                             }
+                        } else {
+                            Text("No presets yet — save one above.")
+                                .font(.caption).foregroundStyle(Theme.textSecondary)
+                                .padding(.vertical, 6)
                         }
                     }
                 }
@@ -170,5 +173,41 @@ struct PresetsView: View {
         .padding(10)
         .background(Theme.panelRaised)
         .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    private var defaultPresetRow: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Default").font(.subheadline.bold()).foregroundStyle(Theme.textPrimary)
+                Text("Factory defaults for \(state.profile.displayName)")
+                    .font(.caption2).foregroundStyle(Theme.textSecondary)
+            }
+            Spacer()
+            Toggle("Backup first", isOn: $autoBackupOnReset)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+            Button {
+                applyDefault()
+            } label: {
+                Text("Reset")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Theme.panelRaised)
+                    .foregroundStyle(Theme.textPrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .background(Theme.panelRaised)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    private func applyDefault() {
+        if autoBackupOnReset {
+            state.userAutoSaveBackup(label: "before reset")
+        }
+        state.userResetRoutingAndMatrix()
     }
 }

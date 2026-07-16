@@ -15,14 +15,15 @@ enum AppInfo {
 /// line up regardless of what content the section actually shows.
 enum StripLayout {
     static let width:               CGFloat = 100
-    static let headerHeight:        CGFloat = 50
-    static let switchRowHeight:     CGFloat = 22
-    static let panRowHeight:        CGFloat = 30
-    static let faderHeight:         CGFloat = 220
-    static let peakReadoutHeight:   CGFloat = 28
-    /// Bottom controls = single 22-pt row, contents centered.
-    static let controlsHeight:      CGFloat = 22
-    static let vSpacing:            CGFloat = 6
+    static let headerHeight:        CGFloat = 30
+    static let switchRowHeight:     CGFloat = 18
+    static let panRowHeight:        CGFloat = 22
+    static let faderHeight:         CGFloat = 100
+    static let peakReadoutHeight:   CGFloat = 22
+    /// Bottom controls = single 18-pt row, contents centered.
+    static let controlsHeight:      CGFloat = 18
+    static let vSpacing:            CGFloat = 4
+    static let rowPaddingV:         CGFloat = 6
 }
 
 // Centralised palette to keep the Control-2-style dark look consistent.

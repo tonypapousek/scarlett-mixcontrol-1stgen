@@ -168,7 +168,7 @@ struct ChannelStrip: View {
 
             DbScale()
         }
-        .frame(height: 220)
+        .frame(height: StripLayout.faderHeight)
         .overlay(alignment: .topTrailing) {
             Text(formatDb(level))
                 .font(.system(size: 9, design: .monospaced))
@@ -276,7 +276,7 @@ struct StripMeter: View {
     @Bindable var state: MixerState
     let source: SignalSource
     let profile: DeviceProfile
-    var height: CGFloat = 220
+    var height: CGFloat = StripLayout.faderHeight
 
     var body: some View {
         let live = Self.level(from: state.peaks, source: source, profile: profile)

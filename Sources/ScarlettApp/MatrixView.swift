@@ -115,14 +115,28 @@ struct MatrixMixerView: View {
     }
 
     private var strips: some View {
-        HStack(alignment: .top, spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(visibleChannels, id: \.self) { ch in
-                        ChannelStrip(channel: ch, state: state)
+        let ch = visibleChannels
+        let mid = ch.lowerBound + ch.count / 2
+        let topHalf = ch.lowerBound..<mid
+        let botHalf = mid..<ch.upperBound
+        return HStack(alignment: .top, spacing: 6) {
+            VStack(spacing: StripLayout.vSpacing) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(topHalf, id: \.self) { ch in
+                            ChannelStrip(channel: ch, state: state)
+                        }
                     }
+                    .padding(.vertical, StripLayout.rowPaddingV)
                 }
-                .padding(.vertical, 4)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(botHalf, id: \.self) { ch in
+                            ChannelStrip(channel: ch, state: state)
+                        }
+                    }
+                    .padding(.vertical, StripLayout.rowPaddingV)
+                }
             }
             PinnedDawStrip(state: state)
             PinnedMasterStrip(state: state)

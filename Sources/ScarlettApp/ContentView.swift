@@ -71,6 +71,11 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            if UserDefaults.standard.bool(forKey: "scarlett.autoBackupOnQuit") {
+                state.userAutoSaveBackup(label: "at shutdown")
+            }
+        }
         .task { state.startMeterPolling() }
     }
 
@@ -113,7 +118,9 @@ struct ContentView: View {
         HStack {
             if !sidebarCollapsed {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(state.isConnected ? state.profile.displayName : "Scarlett MixControl")
+                    Text(state.isConnected
+                         ? state.profile.displayName.replacingOccurrences(of: " (1st gen)", with: "")
+                         : "Scarlett MixControl")
                         .font(.headline).foregroundStyle(Theme.textPrimary)
                     Text("1st Gen").font(.caption).foregroundStyle(Theme.textSecondary)
                 }

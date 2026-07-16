@@ -239,7 +239,7 @@ extension DeviceProfile {
     //
     // 8 analog + 2 S/PDIF + 8 ADAT + 8 DAW.  Matrix is 18 × 8.
     // Wire bytes verified against Linux `s18i8_info` in mixer_scarlett.c.
-    // 8 routable physical outputs (Monitor + Phones + Line 5/6 + S/PDIF).
+    // 8 routable physical outputs (Monitor + two headphone jacks + S/PDIF).
     public static let scarlett18i8 = DeviceProfile(
         productID: 0x8014,
         internalName: "USB24Tracker",
@@ -287,10 +287,10 @@ extension DeviceProfile {
         physicalOutputs: [
             .init(wValue: 0, displayName: "Monitor L",   pairLabel: "Monitor",  isLeft: true),
             .init(wValue: 1, displayName: "Monitor R",   pairLabel: "Monitor",  isLeft: false),
-            .init(wValue: 2, displayName: "Phones L",    pairLabel: "Phones",   isLeft: true),
-            .init(wValue: 3, displayName: "Phones R",    pairLabel: "Phones",   isLeft: false),
-            .init(wValue: 4, displayName: "Line Out 5",  pairLabel: "Line 5+6", isLeft: true),
-            .init(wValue: 5, displayName: "Line Out 6",  pairLabel: "Line 5+6", isLeft: false),
+            .init(wValue: 2, displayName: "HP 01 L",     pairLabel: "HP 01",    isLeft: true),
+            .init(wValue: 3, displayName: "HP 01 R",     pairLabel: "HP 01",    isLeft: false),
+            .init(wValue: 4, displayName: "HP 02 L",     pairLabel: "HP 02",    isLeft: true),
+            .init(wValue: 5, displayName: "HP 02 R",     pairLabel: "HP 02",    isLeft: false),
             .init(wValue: 6, displayName: "S/PDIF L",    pairLabel: "S/PDIF",   isLeft: true),
             .init(wValue: 7, displayName: "S/PDIF R",    pairLabel: "S/PDIF",   isLeft: false),
         ],

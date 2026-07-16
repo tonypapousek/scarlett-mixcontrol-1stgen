@@ -67,12 +67,12 @@ struct PinnedDawStrip: View {
             }
 
             VStack(spacing: 1) {
-                StripMeter(state: state, source: .daw1, profile: state.profile, height: 220)
+                StripMeter(state: state, source: .daw1, profile: state.profile, height: StripLayout.faderHeight)
                 Text("L").font(.system(size: 8, design: .monospaced))
                     .foregroundStyle(Theme.textSecondary)
             }
             VStack(spacing: 1) {
-                StripMeter(state: state, source: .daw2, profile: state.profile, height: 220)
+                StripMeter(state: state, source: .daw2, profile: state.profile, height: StripLayout.faderHeight)
                 Text("R").font(.system(size: 8, design: .monospaced))
                     .foregroundStyle(Theme.textSecondary)
             }
@@ -342,7 +342,7 @@ struct RoutedMeter: View {
     @Bindable var state: MixerState
     let source: MixBus
     let profile: DeviceProfile
-    var height: CGFloat = 220
+    var height: CGFloat = StripLayout.faderHeight
 
     var body: some View {
         let live = Self.level(from: state.peaks,    source: source, profile: profile)
