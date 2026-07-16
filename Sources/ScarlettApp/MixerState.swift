@@ -160,7 +160,7 @@ final class MixerState {
         UserDefaults.standard.register(defaults: [
             "scarlett.autoBackupOnReset": true,
             "scarlett.autoBackupOnLaunch": false,
-            "scarlett.autoBackupOnQuit": false,
+            "scarlett.autoBackupOnQuit": true,
         ])
         installCoreAudioListener()
         attemptConnect()
@@ -214,8 +214,12 @@ final class MixerState {
             refreshFromDevice()
             loadPersistedState()
             ensurePinnedDawChannels()
-            // Push default routes so Mix M1 routing takes effect.
-            pushDefaultRoutes()
+            // Only push default routes when nothing was persisted (first
+            // connect or fresh install).  Otherwise the user's saved routes
+            // from `loadPersistedState` above would be overwritten.
+            if routes.isEmpty {
+                pushDefaultRoutes()
+            }
             if !wasConnected {
                 logEvent(.info, "Connection",
                          "Connected to \(dev.profile.displayName) (firmware \(firmware), serial \(serial))")
@@ -1164,8 +1168,8 @@ final class MixerState {
     /// Hardware switches (impedance / hi-lo), clock, sample rate and master
     /// output attenuation are left alone.
     /// Push default routes (Monitor + Phones ← Mix M1) to the device.
-    /// Called on every connect so the new routing takes effect regardless
-    /// of old UserDefaults or flash state.
+    /// Called only on first connect so the new routing takes effect;
+    /// subsequent connects use the user's persisted routes.
     func pushDefaultRoutes() {
         guard let dev = device else { return }
         let mixBuses = dev.profile.mixBusSources
