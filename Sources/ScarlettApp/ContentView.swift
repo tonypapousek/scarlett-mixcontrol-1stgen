@@ -119,7 +119,7 @@ struct ContentView: View {
             if !sidebarCollapsed {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(state.isConnected
-                         ? state.profile.displayName.replacingOccurrences(of: " (1st gen)", with: "")
+                         ? state.profile.shortDisplayName
                          : "Scarlett MixControl")
                         .font(.headline).foregroundStyle(Theme.textPrimary)
                     Text("1st Gen").font(.caption).foregroundStyle(Theme.textSecondary)
@@ -560,7 +560,7 @@ struct DeviceView: View {
                                     : a.displayName < b.displayName
                             }
                             ForEach(devices, id: \.productID) { p in
-                                let name = p.displayName.replacingOccurrences(of: " (1st gen)", with: "")
+                                let name = p.shortDisplayName
                                 compatRow(symbol: p.isExperimental ? "circle.dashed" : "checkmark.circle.fill",
                                           color: p.isExperimental ? .orange : .green,
                                           text: p.isExperimental
@@ -588,7 +588,7 @@ struct DeviceView: View {
         // fall back to the 8i6 (the primary target).
         let profile = state.device?.profile ?? .scarlett8i6
         return [
-            .init(label: "Model",        value: profile.displayName),
+            .init(label: "Model",        value: profile.shortDisplayName),
             .init(label: "Generation",   value: profile.isSupported
                   ? "1st Gen (supported)"
                   : "1st Gen — detected, not supported in this build"),

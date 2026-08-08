@@ -32,6 +32,11 @@ public struct DeviceProfile: Sendable, Equatable {
     public let internalName: String
     /// Marketing name shown to users.
     public let displayName: String
+    /// `displayName` without the trailing " (1st gen)" marker — used where
+    /// the generation is spelled out separately in the UI.
+    public var shortDisplayName: String {
+        displayName.replacingOccurrences(of: " (1st gen)", with: "")
+    }
     /// True for everything we've not personally validated on hardware.
     public let isExperimental: Bool
 
