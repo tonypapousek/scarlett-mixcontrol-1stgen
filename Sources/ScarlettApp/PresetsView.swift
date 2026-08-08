@@ -6,6 +6,7 @@ struct PresetsView: View {
     @Bindable var state: MixerState
     @State private var newPresetName: String = ""
     @State private var confirmDelete: ScarlettPreset?
+    @State private var confirmDeleteAll = false
     @State private var loadErrorMessage: String?
     @State private var renamingPresetID: UUID?
     @State private var renameText: String = ""
@@ -38,34 +39,21 @@ struct PresetsView: View {
                         .font(.caption).foregroundStyle(Theme.textSecondary)
                 }
 
-                Panel(title: "Automatic backup") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 8) {
-                            Toggle("", isOn: $autoBackupOnLaunch)
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .labelsHidden()
-                            Text("On launch").font(.caption)
-                        }
-                        HStack(spacing: 8) {
-                            Toggle("", isOn: $autoBackupOnQuit)
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .labelsHidden()
-                            Text("On quit").font(.caption)
-                        }
-                        HStack(spacing: 8) {
-                            Toggle("", isOn: $autoBackupOnReset)
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .labelsHidden()
-                            Text("Before reset").font(.caption)
-                        }
-                    }
-                }
-
                 Panel(title: "Saved presets") {
                     VStack(spacing: 4) {
+                        HStack(spacing: 16) {
+                            Text("Auto backup:").font(.caption).foregroundStyle(Theme.textSecondary)
+                            Toggle("On launch", isOn: $autoBackupOnLaunch).toggleStyle(.switch)
+                            Toggle("On quit", isOn: $autoBackupOnQuit).toggleStyle(.switch)
+                            Toggle("Before reset", isOn: $autoBackupOnReset).toggleStyle(.switch)
+                            Spacer()
+                            Button("Delete All", role: .destructive) {
+                                confirmDeleteAll = true
+                            }
+                            .disabled(state.presets.isEmpty)
+                            .help("Delete every saved preset")
+                        }
+                        Divider().overlay(Theme.divider).padding(.vertical, 6)
                         defaultPresetRow
                         if !state.presets.isEmpty {
                             Divider().overlay(Theme.divider)
@@ -83,6 +71,12 @@ struct PresetsView: View {
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // Clicking empty space in the presets area ends an in-progress
+            // rename (same as clicking anywhere else in the app).
+            commitCurrentRename()
+        }
         .background(Theme.background)
         .confirmationDialog(
             "Delete preset?",
@@ -99,6 +93,19 @@ struct PresetsView: View {
                 }
             }
             Button("Cancel", role: .cancel) { confirmDelete = nil }
+        }
+        .confirmationDialog(
+            "Delete all saved presets?",
+            isPresented: $confirmDeleteAll,
+            titleVisibility: .visible
+        ) {
+            Button("Delete All", role: .destructive) {
+                state.userDeleteAllPresets()
+                renamingPresetID = nil
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes every saved preset across all devices. The built-in Default reset is not affected.")
         }
         .alert(
             "Couldn't load preset",
@@ -159,6 +166,25 @@ struct PresetsView: View {
         newPresetName = ""
     }
 
+    /// Commit whatever rename is in progress (if any).  Used by the
+    /// click-anywhere-to-exit paths and before switching to a different row.
+    private func commitCurrentRename() {
+        guard let id = renamingPresetID,
+              let preset = state.presets.first(where: { $0.id == id }) else {
+            renamingPresetID = nil
+            return
+        }
+        commitRename(preset)
+    }
+
+    private func startRename(_ preset: ScarlettPreset) {
+        guard renamingPresetID != preset.id else { return }
+        // Don't silently discard an edit on another row when clicking this one.
+        commitCurrentRename()
+        renameText = preset.name
+        renamingPresetID = preset.id
+    }
+
     private func commitRename(_ preset: ScarlettPreset) {
         let newName = renameText.trimmingCharacters(in: .whitespaces)
         guard !newName.isEmpty, let idx = state.presets.firstIndex(where: { $0.id == preset.id }) else {
@@ -174,7 +200,7 @@ struct PresetsView: View {
 
     private func applyDefault() {
         if autoBackupOnReset {
-            state.userAutoSaveBackup(label: "before reset")
+            state.userAutoSaveBackup()
         }
         state.userResetRoutingAndMatrix()
     }
@@ -214,8 +240,10 @@ struct PresetsView: View {
                     .onSubmit { commitRename(preset) }
                     .onExitCommand { renamingPresetID = nil }
                     .onChange(of: nameFocused) { _, focused in
-                        // Clicking anywhere else commits the rename; Esc above
-                        // already cleared renamingPresetID so it won't double-commit.
+                        // Clicking anywhere else in the app commits the rename.
+                        // `renamingPresetID == preset.id` keeps this from firing
+                        // after we've already switched to another row's rename
+                        // (Esc / startRename clear it first).
                         if !focused, renamingPresetID == preset.id {
                             commitRename(preset)
                         }
@@ -252,24 +280,7 @@ struct PresetsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 3))
             }
             .buttonStyle(.plain)
-
-            Button {
-                if renamingPresetID == preset.id {
-                    commitRename(preset)
-                } else {
-                    renameText = preset.name
-                    renamingPresetID = preset.id
-                }
-            } label: {
-                Image(systemName: "pencil")
-                    .font(.system(size: 11))
-                    .frame(width: 24, height: 22)
-                    .background(Theme.panelRaised)
-                    .foregroundStyle(Theme.textSecondary)
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-            }
-            .buttonStyle(.plain)
-            .help("Rename preset")
+            .help("Load preset")
 
             Button {
                 confirmDelete = preset
@@ -285,6 +296,11 @@ struct PresetsView: View {
             .help("Delete preset")
             .accessibilityLabel("Delete preset \(preset.name)")
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            startRename(preset)
+        }
+        .help("Click to rename")
         .padding(10)
         .background(Theme.panelRaised)
         .clipShape(RoundedRectangle(cornerRadius: 5))

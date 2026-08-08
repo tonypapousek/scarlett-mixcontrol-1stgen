@@ -215,19 +215,12 @@ final class MixerState {
         }
     }
 
-    /// Formatter for auto-backup timestamps.
-    private static let backupFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return f
-    }()
-
-    /// Save a snapshot with a descriptive auto-backup label and the
-    /// current device profile name.
-    func userAutoSaveBackup(label: String) {
-        let ts = Self.backupFormatter.string(from: Date())
-        let tag = "\(profile.displayName) "
-        userSavePreset(name: "Auto-saved \(label) – \(tag)\(ts)")
+    /// Save a snapshot named "Auto Backup".  Because `userSavePreset`
+    /// overwrites same-named presets, each device keeps one rolling backup —
+    /// the list row already shows the timestamp and model, so the name stays
+    /// short and the preset list doesn't get cluttered.
+    func userAutoSaveBackup() {
+        userSavePreset(name: "Auto Backup")
     }
 
     /// Try to (re-)open the device and refresh all state.  Idempotent.
@@ -270,7 +263,7 @@ final class MixerState {
             if !didLaunchBackup {
                 didLaunchBackup = true
                 if UserDefaults.standard.bool(forKey: "scarlett.autoBackupOnLaunch") {
-                    userAutoSaveBackup(label: "at launch")
+                    userAutoSaveBackup()
                     logEvent(.info, "Backup", "Auto-saved launch snapshot")
                 }
             }
@@ -1341,6 +1334,11 @@ final class MixerState {
 
     func userDeletePreset(_ preset: ScarlettPreset) {
         presets.removeAll { $0.id == preset.id }
+        savePresets()
+    }
+
+    func userDeleteAllPresets() {
+        presets.removeAll()
         savePresets()
     }
 

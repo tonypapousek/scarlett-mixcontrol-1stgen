@@ -73,7 +73,7 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             if UserDefaults.standard.bool(forKey: "scarlett.autoBackupOnQuit") {
-                state.userAutoSaveBackup(label: "at shutdown")
+                state.userAutoSaveBackup()
             }
         }
         .task { state.startMeterPolling() }
