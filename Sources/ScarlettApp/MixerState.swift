@@ -205,7 +205,7 @@ final class MixerState {
         UserDefaults.standard.register(defaults: [
             "scarlett.autoBackupOnReset": true,
             "scarlett.autoBackupOnLaunch": false,
-            "scarlett.autoBackupOnQuit": true,
+            "scarlett.autoBackupOnQuit": false,
         ])
         installCoreAudioListener()
         // Defer USB work so the window can appear before we sync-read the
