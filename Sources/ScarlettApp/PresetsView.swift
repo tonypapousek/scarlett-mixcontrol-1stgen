@@ -213,6 +213,13 @@ struct PresetsView: View {
                     .focused($nameFocused)
                     .onSubmit { commitRename(preset) }
                     .onExitCommand { renamingPresetID = nil }
+                    .onChange(of: nameFocused) { _, focused in
+                        // Clicking anywhere else commits the rename; Esc above
+                        // already cleared renamingPresetID so it won't double-commit.
+                        if !focused, renamingPresetID == preset.id {
+                            commitRename(preset)
+                        }
+                    }
                     .onAppear {
                         renameText = preset.name
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
